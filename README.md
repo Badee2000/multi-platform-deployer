@@ -62,24 +62,20 @@ That's it. You go from code to deployed in minutes, not hours.
 
 ## Installation
 
-### Quick Install
+### Install from PyPI (recommended)
 ```bash
-# Clone the repo
-git clone https://github.com/yourusername/multi-platform-deployer.git
-cd multi-platform-deployer
-
-# Create a virtual environment (always do this)
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install the package
-pip install -e .
+# Inside any virtual environment or global workstation
+py -m pip install multi-platform-deployer
 ```
 
-### For Development
+### Work on the Source Locally
 ```bash
-# Install with dev dependencies for testing and linting
-pip install -e ".[dev]"
+git clone https://github.com/yourusername/multi-platform-deployer.git
+cd multi-platform-deployer
+python -m venv .venv
+.venv\Scripts\activate  # On macOS/Linux: source .venv/bin/activate
+py -m pip install -e .
+py -m pip install -e ".[dev]"  # Include lint/test extras while developing
 ```
 
 ---
