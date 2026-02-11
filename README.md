@@ -1,5 +1,8 @@
 # Multi-Platform Deployer 🚀
 
+[![PyPI - Version](https://img.shields.io/pypi/v/multi-platform-deployer.svg)](https://pypi.org/project/multi-platform-deployer/)
+[![PyPI - Downloads](https://img.shields.io/pypi/dm/multi-platform-deployer.svg?label=pip%20installs)](https://pypi.org/project/multi-platform-deployer/)
+
 > **Deploy your Python apps to *any* cloud platform without the headache.**
 
 Deploying to different cloud platforms usually means learning completely different tools, config formats, and workflows. That's exhausting and error-prone. This package fixes that by giving you a **single, simple interface** to deploy Flask, Django, and FastAPI applications to Render, Railway, Vercel, and Heroku.
