@@ -57,7 +57,7 @@ You've built a great Python web app and now you want to deploy it. But here's th
 It's confusing. You end up copy-pasting from docs, getting things wrong, and spending hours debugging deployment issues.
 
 ### The Solution
-We automated all of that. This package:
+I automated all of that. This package:
 
 1. **Checks your app** - Validates that your app is actually ready for production (not just locally)
 2. **Picks the platform** - Works with Render, Railway, Vercel, and Heroku (and you can add more)
@@ -333,7 +333,7 @@ py deploy.py run
 # → Select "Render"
 ```
 
-**What we set up:**
+**What I set up:**
 - Web service with auto-scaling
 - Environment variables
 - Deploy hooks (auto-run migrations)
@@ -348,7 +348,7 @@ py deploy.py run
 # → Select "Railway"
 ```
 
-**What we set up:**
+**What I set up:**
 - Container deployment
 - PostgreSQL/MySQL integration
 - Environment management
@@ -363,7 +363,7 @@ py deploy.py run
 # → Select "Vercel"
 ```
 
-**What we set up:**
+**What I set up:**
 - Serverless functions
 - Edge functions
 - Environment variables
@@ -378,7 +378,7 @@ py deploy.py run
 # → Select "Heroku"
 ```
 
-**What we set up:**
+**What I set up:**
 - Procfile generation
 - Buildpack detection
 - Add-on configuration
@@ -397,10 +397,10 @@ py deploy.py run
 # During the wizard, say "Yes" to run migrations
 ```
 
-We handle:
+I handle:
 - **Django** - `python manage.py migrate`
 - **Alembic** - `alembic upgrade head` (Flask-SQLAlchemy)
-- **Custom scripts** - We can run your migration script
+- **Custom scripts** - I can run your migration script
 
 ### Health Checks
 After deploying, verify everything works:
@@ -424,7 +424,7 @@ Deployed something broken? Go back instantly:
 py deploy.py rollback
 ```
 
-Behind the scenes we snapshot your project after every successful deployment
+Behind the scenes I snapshot your project after every successful deployment
 and tag it with the platform (Render, Railway, Vercel, or Heroku). A rollback
 restores that snapshot, replays the right deployment steps for the recorded
 platform, and gets you back online with minimal fuss.
@@ -475,7 +475,7 @@ EXAMPLES:
 
 ## Testing
 
-We test everything thoroughly. Run the tests yourself:
+I test everything thoroughly. Run the tests yourself:
 
 ```bash
 # Install dev dependencies
@@ -593,7 +593,7 @@ Make sure:
 
 ## Contributing
 
-Have an idea? Found a bug? Want to add AWS support? We'd love help!
+Have an idea? Found a bug? Want to add AWS support? I'd love help!
 
 **Getting started:**
 ```bash
@@ -607,7 +607,7 @@ pytest tests/ -v  # Make sure tests pass
 # Push and create a PR!
 ```
 
-**Code style (we use Black and isort):**
+**Code style (I use Black and isort):**
 ```bash
 black src/ tests/
 isort src/ tests/
@@ -617,7 +617,7 @@ isort src/ tests/
 
 ## Roadmap
 
-Things we're thinking about adding:
+Things I'm working toward:
 
 - [ ] AWS deployment (EC2, Elastic Beanstalk)
 - [ ] Google Cloud Platform
@@ -638,7 +638,7 @@ Things we're thinking about adding:
 A: Yes! Just run `py deploy.py check` to see if there are any issues. If it passes, you're good to deploy.
 
 **Q: Does this support databases?**
-A: Absolutely. We automatically handle migrations for Django and Alembic-based apps. We also detect and maintain database configurations.
+A: Absolutely. I automatically handle migrations for Django and Alembic-based apps. I also detect and maintain database configurations.
 
 **Q: What if I don't want to use the CLI?**
 A: The Python API works just fine for scripts and CI/CD pipelines. You have full control either way.
