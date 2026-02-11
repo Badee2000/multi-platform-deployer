@@ -1,0 +1,12 @@
+platform: railway
+app_name: django-example-app
+
+env:
+  DEBUG: "False"
+  PYTHONUNBUFFERED: "1"
+
+services:
+  - name: web
+    buildCommand: pip install -r requirements.txt && python manage.py migrate && python manage.py collectstatic --noinput
+    startCommand: gunicorn config.wsgi
+    port: 8000
