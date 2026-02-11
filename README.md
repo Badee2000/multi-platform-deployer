@@ -28,14 +28,19 @@ Think of it as a universal translator for cloud deployments.
   ```
   > Prefer not to add a file? You can always run the package directly via
   > `python -m multi_platform_deployer.cli <command>`.
-3. **Ship with three commands**:
+3. **Create your deployment config**:
+  ```bash
+  py deploy.py setup
+  ```
+  This guides you through creating `deployment.yaml` with your platform, app name, and more.
+4. **Ship with commands**:
   ```bash
   py deploy.py check          # Pre-flight audit
   py deploy.py run            # Guided deployment (add --multi for several platforms)
   py deploy.py health --url https://your-app.com
   ```
 
-That's it—copy the shim once, then treat `deploy.py` like any other project tool.
+That's it—config once, then treat `deploy.py` like any other project tool.
 
 ---
 
@@ -85,7 +90,20 @@ py -m pip install -e ".[dev]"  # Include lint/test extras while developing
 
 ## Get Started in 3 Steps
 
-### Step 1: Check If Your App Is Ready
+### Step 1: Set Up Your Deployment Configuration
+```bash
+py deploy.py setup
+```
+
+This launches an interactive wizard that creates your `deployment.yaml` file. You'll be asked for:
+- **Platform** (Render, Railway, Vercel, or Heroku)
+- **App name** (how your app will be named on the platform)
+- **Environment variables** (optional, but recommended)
+- **Services** (Railway-specific, optional)
+
+When done, your `deployment.yaml` is ready to commit to git.
+
+### Step 2: Check If Your App Is Ready
 ```bash
 py deploy.py check
 ```
@@ -102,7 +120,7 @@ This runs a battery of checks to make sure your app is production-ready. It'll t
 
 If everything passes, you're good to go. If not, it tells you exactly what to fix.
 
-### Step 2: Deploy
+### Step 3: Deploy
 ```bash
 # Deploy to one platform
 py deploy.py run
@@ -112,13 +130,13 @@ py deploy.py run --multi
 ```
 
 You'll be guided through a simple wizard:
-1. Pick your platform(s)
+1. Pick your platform(s) (or use config from `deployment.yaml`)
 2. Decide if you want database migrations run
 3. Watch it deploy (takes seconds)
 
 That's actually it. Your app is live.
 
-### Step 3: Verify It Works
+### Step 4: Verify It Works
 ```bash
 py deploy.py health --url https://my-app.onrender.com
 ```
@@ -136,6 +154,7 @@ Everything is straightforward. Here's what you can do:
 
 | Command | What It Does |
 |---------|-------------|
+| `py deploy.py setup` | Create/edit deployment.yaml configuration (first time?) |
 | `py deploy.py check` | Verify your app is production-ready |
 | `py deploy.py run` | Deploy to one platform (interactive) |
 | `py deploy.py run --multi` | Deploy to multiple platforms at once |
@@ -430,6 +449,7 @@ USAGE:
   py deploy.py <command> [options]
 
 COMMANDS:
+  setup              Create/edit deployment.yaml configuration
   check              Check if your app is ready for deployment
   run                Deploy your app (use --multi for multiple platforms)
   info               Show project information
@@ -442,6 +462,7 @@ OPTIONS:
   --endpoints PATHS  Comma-separated endpoints to check (default: /)
 
 EXAMPLES:
+  py deploy.py setup                    # Create deployment config
   py deploy.py check                    # Check readiness
   py deploy.py run                      # Deploy to one platform
   py deploy.py run --multi              # Deploy to multiple platforms

@@ -265,6 +265,95 @@ def quick_check() -> None:
         print("\n❌ Not ready yet.\n")
 
 
+def setup_wizard() -> None:
+    """Interactive wizard to create deployment.yaml file."""
+
+    clear_screen()
+    print_banner()
+    print("⚙️  DEPLOYMENT CONFIGURATION WIZARD")
+    print("-" * 60)
+
+    # Check if deployment config already exists
+    cwd = Path(".")
+    existing_config = None
+    for config_file in ["deployment.yaml", "deployment.yml", "deployment.json"]:
+        if (cwd / config_file).exists():
+            existing_config = config_file
+            break
+
+    if existing_config:
+        if not ask_yes_no(f"\n⚠️  Found existing {existing_config}. Overwrite it?"):
+            print("\nSetup cancelled.\n")
+            return
+
+    print("\n📋 Let's set up your deployment configuration!\n")
+
+    # Ask for platform
+    platform = choose_option(
+        "Which platform do you want to deploy to?",
+        ["Render", "Railway", "Vercel", "Heroku"],
+    ).lower()
+
+    # Ask for app name
+    while True:
+        app_name = input("\nEnter your app name (no spaces): ").strip()
+        if app_name and " " not in app_name:
+            break
+        print("Please enter a valid app name without spaces.")
+
+    # Ask for environment variables
+    config_data = {
+        "platform": platform,
+        "app_name": app_name,
+    }
+
+    if ask_yes_no("\nAdd environment variables?"):
+        env_vars = {}
+        print("\n(Enter each as KEY=VALUE, blank line to finish)")
+        while True:
+            env_input = input("  > ").strip()
+            if not env_input:
+                break
+            if "=" in env_input:
+                key, value = env_input.split("=", 1)
+                env_vars[key.strip()] = value.strip()
+            else:
+                print("  Format: KEY=VALUE")
+        if env_vars:
+            config_data["env"] = env_vars
+
+    # Ask for services (Railway-specific)
+    if platform == "railway" and ask_yes_no("\nAdd services configuration?"):
+        print("\n(Service configuration is optional for Railway)")
+        config_data["services"] = [
+            {
+                "name": "web",
+                "buildCommand": "pip install -r requirements.txt",
+                "startCommand": "gunicorn config.wsgi",
+                "port": 8000,
+            }
+        ]
+
+    # Write configuration
+    use_json = ask_yes_no("\nUse JSON format (vs YAML)?")
+
+    if use_json:
+        import json
+        config_file = cwd / "deployment.json"
+        with open(config_file, "w") as f:
+            json.dump(config_data, f, indent=2)
+        print(f"\n✅ Created {config_file.name}")
+    else:
+        import yaml
+        config_file = cwd / "deployment.yaml"
+        with open(config_file, "w") as f:
+            yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
+        print(f"\n✅ Created {config_file.name}")
+
+    print(f"\n📝 Configuration saved!")
+    print(f"\nYou can now run: py deploy.py run\n")
+
+
 def show_help() -> None:
     """Print CLI help."""
 
@@ -279,6 +368,7 @@ USAGE:
     python -m multi_platform_deployer.cli <command> [options]
 
 COMMANDS:
+    setup              Create deployment.yaml configuration (first time?)
     check              Check if your app is ready for deployment
     run                Deploy your app (use --multi for multiple platforms)
     info               Show project information
@@ -286,6 +376,7 @@ COMMANDS:
     rollback           Rollback to previous deployment
 
 EXAMPLES:
+    py deploy.py setup
     py deploy.py check
     py deploy.py run
     py deploy.py run --multi
@@ -300,13 +391,18 @@ OPTIONS:
     -h, --help         Show this help message
 
 WORKFLOW:
-    1. py deploy.py check
-    2. Fix any issues that fail
-    3. py deploy.py run
+    1. py deploy.py setup   (create deployment config)
+    2. py deploy.py check   (verify app is ready)
+    3. py deploy.py run     (deploy your app)
     4. py deploy.py health --url <your-url>
 
 """
     )
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    setup_wizard()
+    return 0
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -370,6 +466,9 @@ def main() -> int:
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    setup_parser = subparsers.add_parser("setup", help="Create deployment.yaml configuration")
+    setup_parser.set_defaults(func=cmd_setup)
 
     check_parser = subparsers.add_parser("check", help="Check deployment readiness")
     check_parser.set_defaults(func=cmd_check)
