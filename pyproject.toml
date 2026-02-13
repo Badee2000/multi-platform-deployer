@@ -10,7 +10,7 @@ packages = ["multi_platform_deployer"]
 
 [project]
 name = "multi-platform-deployer"
-version = "0.1.0"
+version = "0.1.1"
 description = "A unified Python package for deploying to multiple platforms"
 readme = "README.md"
 requires-python = ">=3.8"
