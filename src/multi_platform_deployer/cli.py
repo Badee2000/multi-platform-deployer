@@ -6,7 +6,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .main import Deployer
 from .utils.logger import setup_logger
@@ -40,13 +40,24 @@ def detect_framework() -> Optional[str]:
     if (cwd / "manage.py").exists():
         return "django"
 
-    flask_files = ["app.py", "wsgi.py", "main.py"]
-    if any((cwd / file_name).exists() for file_name in flask_files):
-        return "flask"
+    markers = {
+        "fastapi": ("from fastapi", "import fastapi", "FastAPI("),
+        "flask": ("from flask", "import flask", "Flask("),
+    }
+    for file_name in ["app.py", "main.py", "wsgi.py"]:
+        path = cwd / file_name
+        if not path.exists():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for framework, needles in markers.items():
+            if any(needle in content for needle in needles):
+                return framework
 
-    fastapi_files = ["app.py", "main.py"]
-    if any((cwd / file_name).exists() for file_name in fastapi_files):
-        return "fastapi"
+    if (cwd / "wsgi.py").exists():
+        return "flask"
 
     return None
 
@@ -121,46 +132,74 @@ def check_readiness() -> bool:
     return False
 
 
-def deploy() -> None:
-    """Run the interactive deployment wizard for a single platform."""
+def deploy(
+    platform: Optional[str] = None,
+    dry_run: bool = False,
+    run_migrations: bool = False,
+) -> bool:
+    """
+    Deploy a single platform.
 
-    clear_screen()
+    Without a platform, runs the interactive wizard. With one, runs
+    non-interactively (used by 'run --platform ...' and CI).
+    Returns True on success.
+    """
+    interactive = platform is None
+
+    if interactive:
+        clear_screen()
     print_banner()
-    print("🚀 DEPLOYMENT WIZARD")
+    print("🚀 DEPLOYMENT WIZARD" if interactive else "🚀 DEPLOYMENT")
     print("-" * 60)
+    if dry_run:
+        print("🔍 DRY RUN: commands will be printed, nothing will be executed.\n")
 
-    framework = detect_framework() or choose_option(
-        "Which framework are you using?",
-        ["Flask", "Django", "FastAPI"],
-    ).lower()
+    framework = detect_framework()
+    if framework is None:
+        if not interactive:
+            print("❌ Could not detect the framework (Flask, Django or FastAPI).\n")
+            return False
+        framework = choose_option(
+            "Which framework are you using?",
+            ["Flask", "Django", "FastAPI"],
+        ).lower()
 
-    deployer = Deployer(".")
+    deployer = Deployer(".", dry_run=dry_run)
     is_ready, _ = deployer.check_deployment_readiness(framework)
     if not is_ready:
         print("\n❌ Application not ready for deployment.\n")
-        return
+        return False
 
-    platform = choose_option(
-        "Which platform do you want to deploy to?",
-        ["Render", "Railway", "Vercel", "Heroku"],
-    ).lower()
+    if interactive:
+        platform = choose_option(
+            "Which platform do you want to deploy to?",
+            ["Render", "Railway", "Vercel", "Heroku"],
+        ).lower()
+        run_migrations = ask_yes_no("Run database migrations?")
 
-    run_migrations = ask_yes_no("Run database migrations?")
-    print(f"\n⏳ Deploying to {platform.upper()}...")
+    if platform is None:
+        return False
+    print(f"\n⏳ {'Planning' if dry_run else 'Deploying'} to {platform.upper()}...")
     success = deployer.deploy(platform, run_migrations=run_migrations)
 
-    if success:
-        print(f"\n✅ DEPLOYMENT SUCCESSFUL on {platform.upper()}!\n")
-        if ask_yes_no("Check application health?"):
-            url = input("Enter your app URL: ").strip()
-            health = deployer.check_health(url)
-            deployer.health_checker.print_summary(health)
-    else:
+    if not success:
         print("\n❌ DEPLOYMENT FAILED\n")
+        return False
+
+    if dry_run:
+        print("\n✅ DRY RUN COMPLETE. Re-run without --dry-run to deploy.\n")
+        return True
+
+    print(f"\n✅ DEPLOYMENT SUCCESSFUL on {platform.upper()}!\n")
+    if interactive and ask_yes_no("Check application health?"):
+        url = input("Enter your app URL: ").strip()
+        health = deployer.check_health(url)
+        deployer.health_checker.print_summary(health)
+    return True
 
 
-def multi_deploy() -> None:
-    """Deploy to multiple platforms interactively."""
+def multi_deploy() -> bool:
+    """Deploy to multiple platforms interactively. Returns True only if every platform succeeded."""
 
     clear_screen()
     print_banner()
@@ -176,7 +215,7 @@ def multi_deploy() -> None:
     is_ready, _ = deployer.check_deployment_readiness(framework)
     if not is_ready:
         print("\n❌ Application not ready for deployment.\n")
-        return
+        return False
 
     print("\nSelect platforms to deploy to (comma-separated numbers):")
     platforms_list = ["Render", "Railway", "Vercel", "Heroku"]
@@ -194,7 +233,7 @@ def multi_deploy() -> None:
 
     if not selected:
         print("No platforms selected.\n")
-        return
+        return False
 
     run_migrations = ask_yes_no("Run database migrations?")
     print(f"\n⏳ Deploying to: {', '.join(p.upper() for p in selected)}...")
@@ -208,6 +247,7 @@ def multi_deploy() -> None:
         status = "SUCCESS" if success else "FAILED"
         print(f"{icon} {platform.upper():<20} [{status}]")
     print("\n")
+    return bool(results) and all(results.values())
 
 
 def show_project_info() -> None:
@@ -265,6 +305,43 @@ def quick_check() -> None:
         print("\n❌ Not ready yet.\n")
 
 
+def _write_env_values(env_vars: dict, env_path: Path) -> Tuple[List[str], List[str]]:
+    """Append KEY=VALUE pairs to a .env file without overwriting existing keys.
+
+    Returns (written_keys, skipped_keys). Values are never printed. New files are
+    created with owner-only permissions where the OS supports it.
+    """
+    existing_keys = set()
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                existing_keys.add(stripped.split("=", 1)[0].strip())
+
+    written: List[str] = []
+    skipped: List[str] = []
+    lines: List[str] = []
+    for key, value in env_vars.items():
+        if key in existing_keys:
+            skipped.append(key)
+        else:
+            lines.append(f"{key}={value}")
+            written.append(key)
+
+    if lines:
+        needs_newline = (
+            env_path.exists()
+            and env_path.stat().st_size > 0
+            and not env_path.read_bytes().endswith(b"\n")
+        )
+        fd = os.open(env_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            if needs_newline:
+                f.write("\n")
+            f.write("".join(line + "\n" for line in lines))
+    return written, skipped
+
+
 def setup_wizard() -> None:
     """Interactive wizard to create deployment.yaml file."""
 
@@ -302,7 +379,7 @@ def setup_wizard() -> None:
         print("Please enter a valid app name without spaces.")
 
     # Ask for environment variables
-    config_data = {
+    config_data: Dict[str, Any] = {
         "platform": platform,
         "app_name": app_name,
     }
@@ -320,7 +397,12 @@ def setup_wizard() -> None:
             else:
                 print("  Format: KEY=VALUE")
         if env_vars:
-            config_data["env"] = env_vars
+            written, skipped = _write_env_values(env_vars, cwd / ".env")
+            if written:
+                print(f"\n🔐 Saved to .env: {', '.join(written)}")
+            if skipped:
+                print(f"⚠️  Already in .env, left unchanged: {', '.join(skipped)}")
+            print("   Values are stored only in .env (git-ignored), not in the deployment config.")
 
     # Ask for services (Railway-specific)
     if platform == "railway" and ask_yes_no("\nAdd services configuration?"):
@@ -339,16 +421,16 @@ def setup_wizard() -> None:
 
     if use_json:
         import json
-        config_file = cwd / "deployment.json"
-        with open(config_file, "w") as f:
+        config_path = cwd / "deployment.json"
+        with open(config_path, "w") as f:
             json.dump(config_data, f, indent=2)
-        print(f"\n✅ Created {config_file.name}")
+        print(f"\n✅ Created {config_path.name}")
     else:
         import yaml
-        config_file = cwd / "deployment.yaml"
-        with open(config_file, "w") as f:
+        config_path = cwd / "deployment.yaml"
+        with open(config_path, "w") as f:
             yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
-        print(f"\n✅ Created {config_file.name}")
+        print(f"\n✅ Created {config_path.name}")
 
     print(f"\n📝 Configuration saved!")
     print(f"\nYou can now run: py deploy.py run\n")
@@ -364,7 +446,8 @@ def show_help() -> None:
 ===============================================================
 
 USAGE:
-    py deploy.py <command> [options]
+    multi-platform-deployer <command> [options]
+    py deploy.py <command> [options]        (if you added the deploy.py shim)
     python -m multi_platform_deployer.cli <command> [options]
 
 COMMANDS:
@@ -411,10 +494,14 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     if args.multi:
-        multi_deploy()
+        succeeded = multi_deploy()
     else:
-        deploy()
-    return 0
+        succeeded = deploy(
+            platform=args.platform,
+            dry_run=args.dry_run,
+            run_migrations=args.migrate,
+        )
+    return 0 if succeeded else 1
 
 
 def cmd_info(args: argparse.Namespace) -> int:
@@ -437,7 +524,7 @@ def cmd_health(args: argparse.Namespace) -> int:
     print(f"\n🏥 Checking health of {url}...")
     health = deployer.check_health(url, endpoints)
     deployer.health_checker.print_summary(health)
-    return 0
+    return 0 if health.get("server_up") else 1
 
 
 def cmd_rollback(args: argparse.Namespace) -> int:
@@ -446,18 +533,33 @@ def cmd_rollback(args: argparse.Namespace) -> int:
         print("Rollback cancelled.\n")
         return 0
 
-    print("\n⏳ Rolling back to previous deployment...")
+    print("\n⏳ Restoring project files from the previous deployment snapshot...")
     try:
-        deployer.rollback_manager.rollback_to_previous()
-        print("\n✅ ROLLBACK SUCCESSFUL!\n")
-        return 0
+        restored = deployer.rollback_manager.rollback_to_previous()
     except Exception as exc:  # pragma: no cover - user feedback path
         print(f"\n❌ ROLLBACK FAILED: {exc}\n")
         return 1
 
+    if not restored:
+        print("\n❌ ROLLBACK FAILED: no previous snapshot could be restored.\n")
+        return 1
+
+    print("\n✅ Project files restored from the previous snapshot.")
+    print("⚠️  The live deployment was NOT changed. Redeploy the restored code on your platform.\n")
+    return 0
+
+
+def _use_utf8_output() -> None:
+    """Windows consoles default to cp1252, which cannot print the emoji used in messages."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
 
 def main() -> int:
     """CLI entry point."""
+    _use_utf8_output()
 
     parser = argparse.ArgumentParser(
         prog="multi-platform-deployer",
@@ -474,7 +576,22 @@ def main() -> int:
     check_parser.set_defaults(func=cmd_check)
 
     run_parser = subparsers.add_parser("run", help="Deploy your application")
-    run_parser.add_argument("--multi", action="store_true", help="Deploy to multiple platforms")
+    run_parser.add_argument("--multi", action="store_true", help="Deploy to multiple platforms (interactive)")
+    run_parser.add_argument(
+        "--platform",
+        choices=["render", "railway", "vercel", "heroku"],
+        help="Deploy to this platform without prompts (for scripts and CI)",
+    )
+    run_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show the exact steps and commands without executing anything",
+    )
+    run_parser.add_argument(
+        "--migrate",
+        action="store_true",
+        help="Run database migrations before deploying (non-interactive mode)",
+    )
     run_parser.set_defaults(func=cmd_run)
 
     info_parser = subparsers.add_parser("info", help="Show project information")
@@ -497,7 +614,8 @@ def main() -> int:
         return 0
 
     try:
-        return args.func(args)
+        exit_code: int = args.func(args)
+        return exit_code
     except KeyboardInterrupt:  # pragma: no cover - user interrupt
         print("\n\n⏸️  Operation cancelled by user.\n")
         return 1

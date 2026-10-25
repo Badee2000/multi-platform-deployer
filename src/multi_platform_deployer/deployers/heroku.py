@@ -54,14 +54,45 @@ class HerokuDeployer(BaseDeployer):
     
     def deploy(self) -> bool:
         """
-        Execute Heroku deployment.
-        
-        Returns:
-            True if deployment successful
+        Deploy by pushing the committed code to Heroku's git remote.
+
+        Preconditions checked here:
+        - HEROKU_API_KEY is set and the Heroku CLI accepts it.
+        - The project is a git repository with no uncommitted changes
+          (git push only deploys commits, so uncommitted edits would be
+          silently left out).
+        - A 'heroku' git remote exists (created by 'heroku create' or
+          'heroku git:remote -a <app>').
         """
-        self.logger.info("Deploying to Heroku...")
-        self.logger.info("Use 'heroku deploy' or 'git push heroku main'")
-        
+        api_key = self._require_credential("HEROKU_API_KEY")
+        if api_key is None:
+            return False
+
+        env = {"HEROKU_API_KEY": api_key}
+        if self._run_step(["heroku", "auth:whoami"], env=env, secrets=[api_key]) is None:
+            self.logger.error("Heroku rejected HEROKU_API_KEY (or the CLI is missing).")
+            return False
+
+        status = self._run_step(["git", "status", "--porcelain"])
+        if status is None:
+            self.logger.error("Could not read git status. Is this project a git repository?")
+            return False
+        if status.strip():
+            self.logger.error(
+                "Uncommitted changes would not be deployed. Commit them first, then run again."
+            )
+            return False
+
+        output = self._run_step(
+            ["git", "push", "heroku", "HEAD:main"],
+            env=env,
+            secrets=[api_key],
+        )
+        if output is None:
+            self.logger.error("Heroku deployment failed; see the output above.")
+            return False
+
+        self.logger.info("Heroku deployment finished. Run 'heroku open' to view the app.")
         return True
     
     def get_config_template(self) -> Dict[str, Any]:

@@ -47,7 +47,9 @@ def setup_logger(
 
 
 def get_logger(name: str = "multi_platform_deployer") -> logging.Logger:
-    """Get a logger instance by name."""
+    """Get a logger under the package namespace so it shares the package handler."""
+    if name != "multi_platform_deployer" and not name.startswith("multi_platform_deployer."):
+        name = f"multi_platform_deployer.{name}"
     return logging.getLogger(name)
 
 

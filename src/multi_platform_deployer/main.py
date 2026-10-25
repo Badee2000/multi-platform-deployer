@@ -13,7 +13,7 @@ You can use this either through the CLI (python deploy.py) or by importing this 
 directly for scripting or CI/CD integration.
 """
 
-from typing import Dict, List, Optional, Any
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from pathlib import Path
 from .deployers import (
     BaseDeployer,
@@ -60,7 +60,7 @@ class Deployer:
     
     # Map of platform names to deployer classes
     # This is how we know which deployer to use when you pick a platform
-    AVAILABLE_DEPLOYERS = {
+    AVAILABLE_DEPLOYERS: Dict[str, Callable[..., BaseDeployer]] = {
         "render": RenderDeployer,
         "railway": RailwayDeployer,
         "vercel": VercelDeployer,
@@ -69,7 +69,7 @@ class Deployer:
     
     # Map of framework names to checker classes
     # This is how we know which checks to run for Flask vs Django vs FastAPI
-    AVAILABLE_CHECKERS = {
+    AVAILABLE_CHECKERS: Dict[str, Callable[..., BaseChecker]] = {
         "flask": FlaskChecker,
         "django": DjangoChecker,
         "fastapi": FastAPIChecker,
@@ -79,7 +79,8 @@ class Deployer:
         self,
         project_root: str = ".",
         config_file: Optional[str] = None,
-        log_level: int = None,
+        log_level: Optional[int] = None,
+        dry_run: bool = False,
     ):
         """
         Initialize the deployer.
@@ -100,8 +101,9 @@ class Deployer:
             deployer = Deployer(".", config_file="deployment.yaml")
         """
         self.project_root = Path(project_root)
-        
-        # Set up logging - INFO level by default (20), which shows key events
+        # Dry-run prints every command and skips migrations and checkpoints.
+        self.dry_run = dry_run
+
         # Set to 10 for DEBUG if you want to see everything
         self.logger = setup_logger(level=log_level or 20)
         
@@ -124,7 +126,7 @@ class Deployer:
         
         self.logger.info(f"Deployer initialized for project: {project_root}")
     
-    def _run_system_checks(self) -> tuple[bool, List[CheckResult]]:
+    def _run_system_checks(self) -> Tuple[bool, List[CheckResult]]:
         """Run platform-agnostic checks before any framework logic."""
 
         system_checker = SystemChecker(str(self.project_root))
@@ -136,7 +138,7 @@ class Deployer:
     def check_deployment_readiness(
         self,
         framework: str = "flask",
-    ) -> tuple[bool, List[CheckResult]]:
+    ) -> Tuple[bool, List[CheckResult]]:
         """
         Check if application is ready for deployment.
         
@@ -209,7 +211,7 @@ class Deployer:
             return None
         
         deployer_class = self.AVAILABLE_DEPLOYERS[platform.lower()]
-        deployer = deployer_class(str(self.project_root), self.config)
+        deployer = deployer_class(str(self.project_root), self.config, dry_run=self.dry_run)
         self.deployers[platform.lower()] = deployer
         
         self.logger.info(f"Deployer initialized for platform: {platform}")
@@ -305,18 +307,23 @@ class Deployer:
         
         # Step 1: Validate everything is set up correctly
         # (configs, credentials, requirements, etc.)
+        # Fill required keys from the request when no deployment file sets them.
+        self.config.setdefault("platform", platform)
+        self.config.setdefault("app_name", self.project_root.resolve().name.replace(" ", "-"))
         if not self.validate_deployment(platform):
             self.logger.error("Deployment validation failed")
             return False
         
         # Step 2: Run database migrations if the user wants
-        # (only if they have a database setup)
-        if run_migrations:
+        # (only if they have a database setup). If migrations fail, stop here:
+        # deploying new code against an unmigrated database can break the app.
+        if run_migrations and self.dry_run:
+            self.logger.info("[dry-run] would run database migrations (skipped).")
+        elif run_migrations:
             self.logger.info("Running database migrations...")
             if not self.migrator.run_migrations():
-                # Migration failed, but we'll try to deploy anyway
-                # Sometimes migrations will fail but the app still works
-                self.logger.warning("Migrations failed, but continuing with deployment")
+                self.logger.error("Migrations failed; aborting deployment. Nothing was deployed.")
+                return False
         
         # Step 3: Get the right deployer for this platform and deploy
         deployer = self.deployers.get(platform.lower())
@@ -328,8 +335,15 @@ class Deployer:
         if not deployer or not deployer.deploy():
             self.logger.error(f"Deployment failed for {platform}")
             return False
+
+        if self.dry_run:
+            self.logger.info(f"[dry-run] Nothing was deployed to {platform}.")
+            return True
         
+        deployed_url = getattr(deployer, "deployed_url", None)
         self.logger.info(f"✓ Deployment completed for {platform}")
+        if deployed_url:
+            self.logger.info(f"  URL: {deployed_url}")
 
         self.rollback_manager.create_checkpoint(
             platform=platform,
@@ -337,6 +351,7 @@ class Deployer:
                 "run_migrations": run_migrations,
                 "config_snapshot": self.config,
                 "checked_frameworks": list(self.checkers.keys()),
+                "deployed_url": deployed_url,
             },
         )
         return True
@@ -394,10 +409,10 @@ class Deployer:
         
         After you deploy, you want to make sure your app actually works, right?
         This method verifies:
-        - Your server is running and responding
+        - Your server is running and responding (the base URL answers below HTTP 500)
         - Key endpoints return the right status codes
-        - Response times are reasonable
-        - Database connections work (if you have a database)
+
+        It does NOT verify database connectivity or response times.
         
         It's like a doctor's checkup for your deployed app!
         

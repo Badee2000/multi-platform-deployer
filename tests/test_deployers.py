@@ -1,5 +1,6 @@
 """Tests for deployers."""
 
+import subprocess
 import pytest
 import tempfile
 from pathlib import Path
@@ -78,6 +79,33 @@ class TestHerokuDeployer:
     def test_platform_name(self):
         """Test platform name."""
         assert HerokuDeployer.get_platform_name() == "Heroku"
+
+
+@pytest.mark.parametrize(
+    "deployer_cls, env_name",
+    [
+        (RenderDeployer, "RENDER_API_KEY"),
+        (RailwayDeployer, "RAILWAY_TOKEN"),
+        (VercelDeployer, "VERCEL_TOKEN"),
+        (HerokuDeployer, "HEROKU_API_KEY"),
+    ],
+)
+def test_deploy_without_credentials_fails_safely(
+    deployer_cls, env_name, tmp_path, monkeypatch, caplog
+):
+    """Missing credentials must fail with a clear message and never shell out."""
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: calls.append(a))
+    monkeypatch.delenv(env_name, raising=False)
+
+    deployer = deployer_cls(str(tmp_path))
+    with caplog.at_level("ERROR"):
+        result = deployer.deploy()
+
+    assert result is False
+    assert calls == []
+    assert env_name in caplog.text
 
 
 if __name__ == "__main__":

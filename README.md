@@ -70,15 +70,20 @@ That's it. You go from code to deployed in minutes, not hours.
 
 ## Installation
 
-### Install from PyPI (recommended)
+### Install from PyPI
 ```bash
-# Inside any virtual environment or global workstation
 py -m pip install multi-platform-deployer
+```
+
+### Install from this source folder (for development or unreleased changes)
+```bash
+# Run from the project folder that contains pyproject.toml
+py -m pip install .
 ```
 
 ### Work on the Source Locally
 ```bash
-git clone https://github.com/yourusername/multi-platform-deployer.git
+git clone https://github.com/Badee2000/multi-platform-deployer.git
 cd multi-platform-deployer
 python -m venv .venv
 .venv\Scripts\activate  # On macOS/Linux: source .venv/bin/activate
@@ -87,6 +92,57 @@ py -m pip install -e ".[dev]"  # Include lint/test extras while developing
 ```
 
 ---
+
+## Deploy Your Project (Step by Step)
+
+This is the path for deploying your own Flask, Django, or FastAPI app with your own accounts.
+
+### 1. Check that your project fits the platform (no credentials needed)
+```bash
+py deploy.py check
+py deploy.py run --platform vercel --dry-run   # or render, railway, heroku
+```
+`--dry-run` runs the readiness checks, then prints every command a real deploy would run. It executes nothing and creates nothing. Missing credentials show up as warnings here, not failures.
+
+### 2. Set up the platform's CLI and credentials (one time)
+
+| Platform | Install | Credential (environment variable) | What gets deployed |
+|----------|---------|-----------------------------------|--------------------|
+| Render | Nothing extra (uses the REST API) | `RENDER_API_KEY` (optional: `RENDER_OWNER_ID`) | The commit on your git remote `origin` |
+| Railway | `npm install -g @railway/cli` | `RAILWAY_TOKEN` | Your local folder (`railway up --ci`) |
+| Vercel | `npm install -g vercel` | `VERCEL_TOKEN` | Your local folder (`vercel deploy --prod --yes`) |
+| Heroku | Heroku CLI, then `heroku login` | `HEROKU_API_KEY` | The commit pushed to the `heroku` git remote |
+
+Set credentials as environment variables in the shell you deploy from. Never put them in `deployment.yaml` or on the command line.
+
+```powershell
+$env:VERCEL_TOKEN = "your-token"     # PowerShell
+```
+```bash
+export VERCEL_TOKEN="your-token"     # macOS / Linux
+```
+
+### 3. Deploy
+```bash
+py deploy.py run --platform vercel          # one platform, no prompts
+py deploy.py run --platform vercel --migrate  # also run Django/Alembic migrations first
+py deploy.py run                            # interactive wizard
+```
+Add `--dry-run` to any of these to preview. A real deploy exits non-zero on failure.
+
+### Things to know before a real deploy
+- **Git:** Render and Heroku deploy committed code. Commit and push first; the deployer refuses a dirty working tree (and, for Render, an unpushed `origin`). Heroku also needs a `heroku` remote (`heroku git:remote -a <app>`). Railway and Vercel deploy your local files.
+- **Secrets are not uploaded.** Local `.env` values are never sent to a platform. Set them in the platform dashboard (Render: Environment; Railway: Variables; Vercel: Project Settings > Environment Variables) or with `heroku config:set`.
+- **Production server:** the default Render start command is `python app.py`, which runs the Flask development server. For production, add `gunicorn` to `requirements.txt` and set `start_command: gunicorn wsgi:app` in `deployment.yaml`. Heroku uses your `Procfile` instead.
+- **Railway URL:** `railway up` does not print a stable URL. Run `railway domain` to get it. If the CLI reports no linked project, run `railway link` once.
+- **Render service ID:** the first real deploy creates the service and prints its ID. Add `render_service_id: <id>` to `deployment.yaml` so later runs redeploy that service instead of creating a new one.
+- **Vercel config:** if `vercel.json` is missing, the deployer generates one that uses `@vercel/python` with `app.py`.
+- **Verify:** `py deploy.py health --url https://your-app.example.com`.
+
+### Known limitations
+- The deployers are covered by mocked tests. Live calls to Render, Railway, Vercel, and Heroku have not been verified end to end. Make your first real deploy to a throwaway app.
+- The Python 3.8 to 3.10 runtimes are not tested.
+- Railway and Heroku token behavior depends on each vendor's CLI. The live read-only checks (see [Testing](#testing)) confirm the credential works before you deploy.
 
 ## Get Started in 3 Steps
 
@@ -142,9 +198,10 @@ py deploy.py health --url https://my-app.onrender.com
 ```
 
 This checks that your deployed app is up and responding correctly. It verifies:
-- Server is running
-- Main endpoints are responsive
-- Database is connected (if applicable)
+- Server is running (the base URL answers with any HTTP status below 500; a 5xx or no connection counts as down)
+- Requested endpoints return their HTTP status codes
+
+It does **not** verify database connectivity or response times. The database check is reported as `NOT CHECKED`.
 
 ---
 
@@ -326,81 +383,78 @@ All checks give you **specific, actionable feedback**. Not vague errors. Real gu
 ## Supported Platforms
 
 ### Render
-Best for: General purpose Python web apps
+Best for: General purpose Python web apps. Uses the Render REST API.
 
 ```bash
-py deploy.py run
-# → Select "Render"
+py deploy.py run --platform render
 ```
 
-**What I set up:**
-- Web service with auto-scaling
-- Environment variables
-- Deploy hooks (auto-run migrations)
-- Health checks
-- Log streaming
+**What it does:**
+- Creates a web service from your `origin` git remote (or triggers a deploy when `render_service_id` is set)
+- Build command: `pip install -r requirements.txt`
+- Start command: `start_command` from your config, default `python app.py`
+- Requires a clean git working tree and an `origin` remote. Only committed code is deployed.
+- Needs `RENDER_API_KEY` (and optionally `RENDER_OWNER_ID`)
+
+> The default start command runs the Flask/FastAPI development server. For production, set `start_command: gunicorn wsgi:app` in `deployment.yaml` and add `gunicorn` to `requirements.txt`.
 
 ### Railway
-Best for: Using databases alongside your app
+Best for: Apps that need the Railway runtime
 
 ```bash
-py deploy.py run
-# → Select "Railway"
+py deploy.py run --platform railway
 ```
 
-**What I set up:**
-- Container deployment
-- PostgreSQL/MySQL integration
-- Environment management
-- Volume mounting
-- Deploy triggers
+**What it does:**
+- Runs `railway up --ci` with the Railway CLI
+- Generates `railway.json` (Nixpacks builder) if you do not have one
+- Needs the Railway CLI on your PATH and `RAILWAY_TOKEN`
+- The deploy prints no stable public URL, so check the Railway dashboard for it
 
 ### Vercel
 Best for: Serverless Python APIs (FastAPI, Flask)
 
 ```bash
-py deploy.py run
-# → Select "Vercel"
+py deploy.py run --platform vercel
 ```
 
-**What I set up:**
-- Serverless functions
-- Edge functions
-- Environment variables
-- Auto-scaling
-- CDN distribution
+**What it does:**
+- Runs `vercel deploy --prod --yes` with the Vercel CLI
+- Generates `vercel.json` (Python builder, `app.py`) if you do not have one
+- Needs the Vercel CLI on your PATH and `VERCEL_TOKEN`
+- Prints the production URL when the CLI reports it
 
 ### Heroku
-Best for: Traditional deployed apps with add-ons
+Best for: Apps deployed with git push
 
 ```bash
-py deploy.py run
-# → Select "Heroku"
+py deploy.py run --platform heroku
 ```
 
-**What I set up:**
-- Procfile generation
-- Buildpack detection
-- Add-on configuration
-- Dyno management
-- Log aggregation
+**What it does:**
+- Checks you are logged in with `heroku auth:whoami`
+- Requires a clean git working tree, a `heroku` git remote, and a `Procfile`
+- Runs `git push heroku HEAD:main`
+- Needs the Heroku CLI logged in (`heroku login`)
 
 ---
 
 ## Advanced Features
 
 ### Database Migrations
-Automatically detected and run:
+Run as part of `deploy()` when you enable them (the wizard asks; the default is on):
 
 ```bash
 py deploy.py run
 # During the wizard, say "Yes" to run migrations
 ```
 
-I handle:
+Supported migration runners:
 - **Django** - `python manage.py migrate`
 - **Alembic** - `alembic upgrade head` (Flask-SQLAlchemy)
-- **Custom scripts** - I can run your migration script
+
+If migrations fail, the deployment is aborted before anything is deployed.
+Other migration scripts are not run automatically.
 
 ### Health Checks
 After deploying, verify everything works:
@@ -412,10 +466,10 @@ py deploy.py health \
 ```
 
 This checks:
-- Server is responding
-- Status codes are correct
-- Response times are reasonable
-- Database is connected
+- Server is responding (the base URL answers with any status below 500, so a `/health` route is not required)
+- Endpoint status codes (HTTP errors such as 500 or 404 are reported with their real code)
+
+It does not check response times or database connectivity. The database is reported as `NOT CHECKED`. The command exits with a non-zero code if the server is not healthy.
 
 ### Rollback
 Deployed something broken? Go back instantly:
@@ -424,10 +478,12 @@ Deployed something broken? Go back instantly:
 py deploy.py rollback
 ```
 
-Behind the scenes I snapshot your project after every successful deployment
-and tag it with the platform (Render, Railway, Vercel, or Heroku). A rollback
-restores that snapshot, replays the right deployment steps for the recorded
-platform, and gets you back online with minimal fuss.
+After every successful deployment record, the project files are snapshotted
+(`.env` files are never included). A rollback restores the snapshot from the
+deployment before the most recent one. It restores **files only**: the live
+deployment on your platform is not changed, so you must redeploy the restored
+code yourself. The command exits with a non-zero code if no previous snapshot
+exists or the restore fails.
 
 ### Deploy to Multiple Platforms
 Want your app on Render AND Railway for redundancy?
@@ -435,8 +491,9 @@ Want your app on Render AND Railway for redundancy?
 ```bash
 py deploy.py run --multi
 # → Select both Render and Railway
-# → Everything deploys simultaneously
 ```
+
+> **Note:** `--multi` deploys to each platform in turn. Each platform's deploy needs its own CLI or API token, and a failure on one platform does not roll back the others.
 
 Each platform gets properly configured. You now have failover coverage.
 
@@ -451,24 +508,28 @@ USAGE:
 COMMANDS:
   setup              Create/edit deployment.yaml configuration
   check              Check if your app is ready for deployment
-  run                Deploy your app (use --multi for multiple platforms)
+  run                Deploy your app (interactive, or --platform for one platform)
   info               Show project information
   health             Check deployed app health
   rollback           Rollback to previous deployment
 
 OPTIONS:
+  --platform NAME    Deploy to one platform without prompts (render, railway, vercel, heroku)
+  --dry-run          With --platform: print the commands and checks, run nothing
+  --migrate          With --platform: run Django/Alembic migrations first
   --multi            Deploy to multiple platforms
   --url URL          App URL for health check
   --endpoints PATHS  Comma-separated endpoints to check (default: /)
 
 EXAMPLES:
-  py deploy.py setup                    # Create deployment config
-  py deploy.py check                    # Check readiness
-  py deploy.py run                      # Deploy to one platform
-  py deploy.py run --multi              # Deploy to multiple platforms
-  py deploy.py info                     # Show project info
-  py deploy.py health --url https://... # Check health
-  py deploy.py rollback                 # Rollback deployment
+  py deploy.py setup                              # Create deployment config
+  py deploy.py check                              # Check readiness
+  py deploy.py run --platform vercel --dry-run    # Preview a Vercel deploy (no credentials needed)
+  py deploy.py run --platform vercel              # Deploy to Vercel
+  py deploy.py run --multi                        # Deploy to multiple platforms
+  py deploy.py info                               # Show project info
+  py deploy.py health --url https://...           # Check health
+  py deploy.py rollback                           # Rollback deployment
 ```
 
 ---
@@ -491,10 +552,12 @@ pytest --cov=src --cov-report=html
 pytest tests/test_deployers.py -v
 
 # Run one specific test
-pytest tests/test_checkers.py::TestFlaskChecker::test_check_requirements -v
+pytest tests/test_checkers.py::TestFlaskChecker -v
 ```
 
-**Current status:** 36 tests, all passing, 57% code coverage.
+**Current status:** 112 tests passing, 5 skipped (the live deploy tests, which run only when you opt in), mypy clean on `src/`.
+
+Live, read-only checks against real platforms run only when you set `MPD_LIVE_TESTS=1` plus the platform tokens. They never deploy. Without them, those tests are skipped.
 
 ---
 
@@ -540,8 +603,7 @@ multi-platform-deployer/
 │
 ├── deploy.py              # CLI entry point (run this!)
 ├── cli.py                 # CLI implementation
-├── setup.py               # Package setup
-├── pyproject.toml         # Project config
+├── pyproject.toml         # Project config and package metadata
 ├── requirements.txt       # Dependencies
 ├── README_COMPLETE.md     # This file
 └── LICENSE                # MIT License
@@ -589,6 +651,8 @@ Make sure:
 2. `DATABASE_URL` environment variable is set correctly
 3. Your migrations are in the right folder
 
+The deployment is aborted when migrations fail, so nothing is deployed. Fix the migration and run `deploy` again.
+
 ---
 
 ## Contributing
@@ -597,7 +661,7 @@ Have an idea? Found a bug? Want to add AWS support? I'd love help!
 
 **Getting started:**
 ```bash
-git clone https://github.com/yourusername/multi-platform-deployer.git
+git clone https://github.com/Badee2000/multi-platform-deployer.git
 cd multi-platform-deployer
 pip install -e ".[dev]"
 
@@ -638,13 +702,13 @@ Things I'm working toward:
 A: Yes! Just run `py deploy.py check` to see if there are any issues. If it passes, you're good to deploy.
 
 **Q: Does this support databases?**
-A: Absolutely. I automatically handle migrations for Django and Alembic-based apps. I also detect and maintain database configurations.
+A: Django (`manage.py migrate`) and Alembic (Flask-SQLAlchemy) migrations are run automatically when enabled. A failed migration aborts the deployment. Other database setups are not managed.
 
 **Q: What if I don't want to use the CLI?**
 A: The Python API works just fine for scripts and CI/CD pipelines. You have full control either way.
 
 **Q: Can I deploy the same app to multiple platforms?**
-A: Yes! That's the whole point. `py deploy.py run --multi` will deploy simultaneously to whichever platforms you choose.
+A: Yes. Run `py deploy.py run --platform <name>` once per platform. Each platform needs its own CLI or API token. Note that `--multi` deploys each platform in turn and does not roll back the others on failure.
 
 **Q: Is my data safe?**
 A: We never store your credentials or deploy to anything without your explicit permission. Everything runs on your machine or the platforms you authorize.
@@ -653,10 +717,10 @@ A: We never store your credentials or deploy to anything without your explicit p
 A: Typically 30 seconds to 2 minutes depending on the platform and your app size.
 
 **Q: Can I rollback?**
-A: Yes. `py deploy.py rollback` takes you back to the previous working deployment.
+A: It restores the previous project snapshot's files. It does not change the live deployment, so you must redeploy afterwards.
 
 **Q: Is this production-ready?**
-A: Absolutely. 36 tests, all passing. We handle errors, validation, and edge cases. Real projects use it.
+A: Not yet. Rollback and exit codes are now tested, but real platform deployment is not implemented, and some health checks are placeholders.
 
 ---
 
@@ -673,7 +737,7 @@ There's no reason deployment should be complicated. This package takes the frict
 **Get started right now:**
 
 ```bash
-git clone https://github.com/yourusername/multi-platform-deployer.git
+git clone https://github.com/Badee2000/multi-platform-deployer.git
 cd multi-platform-deployer
 pip install -e .
 py deploy.py check

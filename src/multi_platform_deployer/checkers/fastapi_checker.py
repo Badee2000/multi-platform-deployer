@@ -174,6 +174,6 @@ class FastAPIChecker(BaseChecker):
         
         return CheckResult(
             "Database configuration",
-            False,
-            "Database configuration not found (may be optional)"
+            True,
+            "No database configuration found (OK for stateless apps; set DATABASE_URL if needed)"
         )

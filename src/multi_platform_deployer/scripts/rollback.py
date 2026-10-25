@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 import zipfile
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -27,7 +27,7 @@ class RollbackManager:
     def create_checkpoint(self, platform: str, metadata: Optional[dict] = None) -> Optional[dict]:
         """Create a rollback checkpoint for a deployment."""
         deployment_id = self._generate_deployment_id(platform)
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         state: Dict[str, Any] = {
             "id": deployment_id,
             "platform": platform.lower(),
@@ -66,28 +66,34 @@ class RollbackManager:
             self.logger.error(f"Error saving deployment state: {e}")
             return False
     
-    def get_previous_deployment(self) -> Optional[dict]:
-        """Return the most recent deployment metadata if it exists."""
+    def _load_deployment_records(self) -> List[dict]:
+        """Return readable deployment records, newest first."""
         deployment_dir = self.project_root / ".deployment"
+        records: List[dict] = []
+        for path in deployment_dir.glob("*.json"):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    records.append(json.load(f))
+            except (OSError, json.JSONDecodeError) as exc:
+                self.logger.warning(f"Skipping unreadable deployment record {path.name}: {exc}")
+        records.sort(key=lambda record: str(record.get("timestamp", "")), reverse=True)
+        return records
 
-        if not deployment_dir.exists():
+    def get_previous_deployment(self) -> Optional[dict]:
+        """Return the deployment that was live before the most recent checkpoint.
+
+        The newest checkpoint describes the current deployment, so rolling back
+        must target the one before it.
+        """
+        if not (self.project_root / ".deployment").exists():
             self.logger.warning("No deployment history found")
             return None
 
-        try:
-            files = sorted(
-                deployment_dir.glob("*.json"),
-                key=lambda x: x.stat().st_mtime,
-                reverse=True,
-            )
-
-            if files:
-                with open(files[0], "r", encoding="utf-8") as f:
-                    return json.load(f)
-        except Exception as e:
-            self.logger.warning(f"Error reading deployment history: {e}")
-
-        return None
+        records = self._load_deployment_records()
+        if len(records) < 2:
+            self.logger.warning("No previous deployment to roll back to")
+            return None
+        return records[1]
     
     def rollback_to_previous(
         self,
@@ -155,7 +161,7 @@ class RollbackManager:
     # --- Internal helpers -------------------------------------------------
 
     def _generate_deployment_id(self, platform: str) -> str:
-        timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
         return f"{platform.lower()}_{timestamp}"
 
     def _get_current_git_commit(self) -> Optional[str]:
@@ -173,6 +179,13 @@ class RollbackManager:
             self.logger.debug(f"Unable to resolve git commit: {exc}")
         return None
 
+    @staticmethod
+    def _is_secret_file(file_name: str) -> bool:
+        """Return True for .env files, which may hold credentials and are never snapshotted."""
+        return file_name == ".env" or (
+            file_name.startswith(".env.") and file_name != ".env.example"
+        )
+
     def _create_project_snapshot(self, deployment_id: str) -> Optional[str]:
         try:
             artifacts_dir = self.project_root / ".deployment" / "artifacts"
@@ -189,7 +202,7 @@ class RollbackManager:
                         continue
 
                     for file_name in files:
-                        if file_name.endswith((".pyc", ".pyo")):
+                        if file_name.endswith((".pyc", ".pyo")) or self._is_secret_file(file_name):
                             continue
                         source_path = Path(root) / file_name
                         relative_path = source_path.relative_to(self.project_root)

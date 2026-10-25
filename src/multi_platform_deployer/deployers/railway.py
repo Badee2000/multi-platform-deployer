@@ -23,8 +23,8 @@ class RailwayDeployer(BaseDeployer):
         self.logger.info("Validating Railway deployment readiness...")
         
         checks = [
-            (self._check_railway_config, "Railway configuration"),
-            (self._check_procfile, "Procfile or start command"),
+            (self._check_requirements, "requirements.txt"),
+            (self._check_procfile, "Start command (Procfile, railway.json or start_command in config)"),
         ]
         
         all_valid = True
@@ -54,15 +54,27 @@ class RailwayDeployer(BaseDeployer):
     
     def deploy(self) -> bool:
         """
-        Execute Railway deployment.
-        
-        Returns:
-            True if deployment successful
+        Deploy with the Railway CLI.
+
+        Uses RAILWAY_TOKEN (a project token) from the environment. The token
+        identifies the project, so no interactive `railway link` is needed.
+        Railway's CLI does not print a stable public URL; run `railway domain`
+        to see it.
         """
-        self.logger.info("Deploying to Railway...")
-        self.logger.info("Use 'railway up' command to deploy")
-        self.logger.info("Or push to your connected version control system")
-        
+        token = self._require_credential("RAILWAY_TOKEN")
+        if token is None:
+            return False
+
+        output = self._run_step(
+            ["railway", "up", "--ci"],
+            env={"RAILWAY_TOKEN": token},
+            secrets=[token],
+        )
+        if output is None:
+            self.logger.error("Railway deployment failed; see the output above.")
+            return False
+
+        self.logger.info("Railway deployment finished. Run 'railway domain' to get the public URL.")
         return True
     
     def get_config_template(self) -> Dict[str, Any]:
@@ -75,25 +87,29 @@ class RailwayDeployer(BaseDeployer):
         return {
             "$schema": "https://railway.app/railway.schema.json",
             "build": {
-                "builder": "dockerfile"
+                "builder": "NIXPACKS"
             },
             "deploy": {
                 "startCommand": "python app.py",
-                "restartPolicyType": "on_failure",
+                "restartPolicyType": "ON_FAILURE",
                 "restartPolicyMaxRetries": 5
             }
         }
     
+    def _check_requirements(self) -> bool:
+        """Railway's Nixpacks builder installs dependencies from requirements.txt."""
+        return file_exists(str(self.project_root / "requirements.txt"))
+
     def _check_railway_config(self) -> bool:
         """Check if railway.json exists."""
         return file_exists(str(self.project_root / "railway.json")) or \
                file_exists(str(self.project_root / "railway.yaml"))
     
     def _check_procfile(self) -> bool:
-        """Check if Procfile or start command is configured."""
+        """Check that a start command is configured."""
         procfile_exists = file_exists(str(self.project_root / "Procfile"))
         has_start_command = "start_command" in self.config
-        return procfile_exists or has_start_command
+        return procfile_exists or has_start_command or self._check_railway_config()
 
     def rollback(self, deployment_state: Dict[str, Any]) -> bool:
         """Redeploy restored snapshot for Railway deployments."""

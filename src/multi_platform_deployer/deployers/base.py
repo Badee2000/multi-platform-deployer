@@ -13,12 +13,17 @@ This makes it easy to add support for new platforms - just inherit from this
 and implement the abstract methods.
 """
 
+import os
+import shutil
+import subprocess
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Iterable, List, Optional
 from pathlib import Path
 from ..utils.logger import get_logger
 from ..utils.helpers import run_command, write_yaml
 from ..config.loader import ConfigLoader
+
+DEFAULT_STEP_TIMEOUT = 900  # seconds; deploys can be slow but must not hang forever
 
 
 class BaseDeployer(ABC):
@@ -44,6 +49,7 @@ class BaseDeployer(ABC):
         self,
         project_root: str = ".",
         config: Optional[Dict[str, Any]] = None,
+        dry_run: bool = False,
     ):
         """
         Initialize a deployer.
@@ -61,6 +67,93 @@ class BaseDeployer(ABC):
         self.config = config or {}
         self.logger = get_logger(self.__class__.__name__)
         self.config_loader = ConfigLoader(project_root)
+        # In dry-run mode every external step is printed, never executed.
+        self.dry_run = dry_run
+        # Set by deploy() when the platform reports a public URL.
+        self.deployed_url: Optional[str] = None
+
+    def _require_credential(self, env_name: str) -> Optional[str]:
+        """
+        Read an API token from the environment.
+
+        Tokens are only ever passed to tools through environment variables,
+        never as command-line arguments, so they cannot leak via process lists.
+        In dry-run mode a missing token is a warning, not an error.
+        """
+        value = os.environ.get(env_name, "")
+        if value:
+            return value
+        if self.dry_run:
+            self.logger.warning(f"[dry-run] {env_name} is not set; a real deploy would fail.")
+            return ""
+        self.logger.error(
+            f"{env_name} is not set. Export it in your shell before deploying "
+            f"to {self.get_platform_name()}."
+        )
+        return None
+
+    @staticmethod
+    def _redact(text: str, secrets: Iterable[str]) -> str:
+        """Remove secret values from text before it is logged or shown."""
+        for secret in secrets:
+            if secret:
+                text = text.replace(secret, "***")
+        return text
+
+    def _run_step(
+        self,
+        command: List[str],
+        env: Optional[Dict[str, str]] = None,
+        secrets: Iterable[str] = (),
+        timeout: float = DEFAULT_STEP_TIMEOUT,
+    ) -> Optional[str]:
+        """
+        Run one external step (a vendor CLI call).
+
+        Returns:
+            stdout on success (secrets redacted), "" in dry-run mode,
+            or None on failure. Never raises.
+        """
+        secrets = [s for s in secrets if s]
+        display = " ".join(command)
+        if self.dry_run:
+            self.logger.info(f"[dry-run] would run: {display}")
+            return ""
+
+        # Resolve the executable first; on Windows, npm tools are .cmd shims
+        # that subprocess cannot start from a bare name.
+        executable = shutil.which(command[0])
+        if executable is None:
+            self.logger.error(
+                f"'{command[0]}' was not found on PATH. Install it and try again."
+            )
+            return None
+
+        argv = [executable] + command[1:]
+        try:
+            result = run_command(
+                argv,
+                cwd=str(self.project_root),
+                env=env,
+                check=False,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            self.logger.error(f"Timed out after {timeout:.0f}s: {display}")
+            return None
+        except OSError as e:
+            self.logger.error(f"Could not start {command[0]}: {self._redact(str(e), secrets)}")
+            return None
+
+        if result.returncode != 0:
+            detail = self._redact((result.stderr or result.stdout or "").strip(), secrets)
+            self.logger.error(
+                f"Command failed (exit {result.returncode}): {display}\n{detail[-2000:]}"
+            )
+            return None
+
+        self.logger.info(f"Command succeeded: {display}")
+        return self._redact(result.stdout or "", secrets)
     
     @abstractmethod
     def validate(self) -> bool:

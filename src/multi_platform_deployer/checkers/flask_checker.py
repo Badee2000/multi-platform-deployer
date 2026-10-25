@@ -159,8 +159,8 @@ class FlaskChecker(BaseChecker):
         
         return CheckResult(
             "Database configuration",
-            False,
-            "Database configuration not clearly found (may be optional)"
+            True,
+            "No database configuration found (OK for stateless apps; set DATABASE_URL if needed)"
         )
     
     def check_debug_mode(self) -> CheckResult:

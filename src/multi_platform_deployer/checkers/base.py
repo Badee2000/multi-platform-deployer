@@ -7,7 +7,7 @@ from pathlib import Path
 from ..utils.logger import get_logger
 
 
-@dataclass(slots=True)
+@dataclass
 class CheckResult:
     """Result of a deployment readiness check."""
 

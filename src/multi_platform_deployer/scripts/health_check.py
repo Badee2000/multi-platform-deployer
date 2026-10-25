@@ -1,13 +1,16 @@
 """Post-deployment health checks."""
 
 import time
-from typing import Optional
+import urllib.error
+from typing import Any, Dict, Optional
 from ..utils.logger import get_logger
 from ..utils.helpers import run_command
 
 
 class HealthChecker:
     """Check application health after deployment."""
+
+    MAX_BACKOFF_SECONDS = 30  # Caps retry sleeps so a dead server fails in minutes, not ~17
     
     def __init__(self, base_url: str = "http://localhost:8000"):
         """
@@ -23,36 +26,46 @@ class HealthChecker:
     def check_server_up(self, max_retries: int = 10) -> bool:
         """
         Check if server is responding.
-        
+
+        Probes the base URL. Any response below HTTP 500 counts as up, so an app
+        without a /health route still passes. 5xx responses and connection
+        failures are retried, then reported as down.
+
         Args:
             max_retries: Maximum number of connection attempts
-        
+
         Returns:
             True if server is up
         """
         self.logger.info(f"Checking if server is up at {self.base_url}")
-        
+
         for attempt in range(max_retries):
             try:
                 import urllib.request
-                response = urllib.request.urlopen(f"{self.base_url}/health", timeout=5)
-                
-                if response.status == 200:
+                response = urllib.request.urlopen(self.base_url, timeout=5)
+
+                if response.status < 500:
                     self.logger.info("✓ Server is responding")
                     return True
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt  # Exponential backoff
-                    self.logger.info(
-                        f"Server not responding yet. "
-                        f"Attempt {attempt + 1}/{max_retries}. "
-                        f"Retrying in {wait_time}s..."
-                    )
-                    time.sleep(wait_time)
-                else:
-                    self.logger.error(f"Server not responding after {max_retries} attempts")
-        
+            except urllib.error.HTTPError as e:
+                if e.code < 500:
+                    self.logger.info(f"✓ Server is responding (HTTP {e.code} on the base URL)")
+                    return True
+            except Exception:
+                pass
+            if attempt < max_retries - 1:
+                wait_time = min(2 ** attempt, self.MAX_BACKOFF_SECONDS)  # Capped exponential backoff
+                self.logger.info(
+                    f"Server not responding yet. "
+                    f"Attempt {attempt + 1}/{max_retries}. "
+                    f"Retrying in {wait_time}s..."
+                )
+                time.sleep(wait_time)
+            else:
+                self.logger.error(f"Server not responding after {max_retries} attempts")
+
         return False
+
     
     def check_endpoints(self, endpoints: list) -> dict:
         """
@@ -80,6 +93,13 @@ class HealthChecker:
                 }
                 
                 self.logger.info(f"✓ {endpoint}: {response.status}")
+            except urllib.error.HTTPError as e:
+                results[endpoint] = {
+                    "status": e.code,
+                    "ok": False,
+                    "error": f"HTTP {e.code}",
+                }
+                self.logger.warning(f"✗ {endpoint}: HTTP {e.code}")
             except Exception as e:
                 results[endpoint] = {
                     "status": None,
@@ -90,27 +110,23 @@ class HealthChecker:
         
         return results
     
-    def check_database(self) -> bool:
+    def check_database(self) -> Optional[bool]:
         """
-        Check if database is accessible.
-        
+        Database connectivity is not verified by this tool.
+
+        A real check needs the project's database settings and credentials, which
+        are not loaded here, so the result is unknown rather than a pass.
+
         Returns:
-            True if database is accessible
+            None, meaning the database was not checked
         """
-        self.logger.info("Checking database connectivity...")
-        
-        try:
-            # This would be framework-specific
-            self.logger.info("Database connectivity check - framework specific")
-            return True
-        except Exception as e:
-            self.logger.error(f"Database check failed: {e}")
-            return False
+        self.logger.warning("Database connectivity is not checked by this tool.")
+        return None
     
     def run_all_checks(
         self,
         endpoints: Optional[list] = None,
-    ) -> dict:
+    ) -> Dict[str, Any]:
         """
         Run all health checks.
         
@@ -120,7 +136,7 @@ class HealthChecker:
         Returns:
             Dictionary of all check results
         """
-        results = {}
+        results: Dict[str, Any] = {}
         
         results["server_up"] = self.check_server_up()
         results["database"] = self.check_database()
@@ -137,7 +153,9 @@ class HealthChecker:
         print("="*50)
         
         for check_name, result in results.items():
-            if isinstance(result, bool):
+            if result is None:
+                print(f"? NOT CHECKED: {check_name.replace('_', ' ').title()}")
+            elif isinstance(result, bool):
                 status = "✓ PASS" if result else "✗ FAIL"
                 print(f"{status}: {check_name.replace('_', ' ').title()}")
             elif isinstance(result, dict):

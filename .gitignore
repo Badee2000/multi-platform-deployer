@@ -33,3 +33,5 @@ deployment-artifacts/
 artifacts/
 *.pem
 *.key
+copilot-instructions.md
+docs

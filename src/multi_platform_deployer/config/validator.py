@@ -66,28 +66,3 @@ class ConfigValidator:
             logger.info("Configuration validation passed")
         
         return is_valid, errors
-    
-    @staticmethod
-    def validate_env_vars(config: Dict[str, Any]) -> Tuple[bool, List[str]]:
-        """
-        Validate environment variables in configuration.
-        
-        Args:
-            config: Configuration dictionary
-        
-        Returns:
-            Tuple of (is_valid, missing_vars)
-        """
-        errors = []
-        
-        env_vars = config.get("env_vars", {})
-        if not isinstance(env_vars, dict):
-            errors.append("env_vars must be a dictionary")
-            return False, errors
-        
-        required_env = config.get("required_env_vars", [])
-        for var in required_env:
-            if var not in env_vars:
-                errors.append(f"Missing required environment variable: {var}")
-        
-        return len(errors) == 0, errors

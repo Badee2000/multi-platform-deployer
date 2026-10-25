@@ -25,6 +25,7 @@ def run_command(
     cwd: Optional[str] = None,
     env: Optional[Dict[str, str]] = None,
     check: bool = True,
+    timeout: Optional[float] = None,
 ) -> subprocess.CompletedProcess:
     """
     Run a shell command and return the result.
@@ -34,6 +35,8 @@ def run_command(
         cwd: Working directory for command
         env: Environment variables
         check: Raise exception if command fails
+        timeout: Seconds before the command is killed (None means no limit).
+            Raises subprocess.TimeoutExpired when exceeded.
     
     Returns:
         CompletedProcess instance
@@ -49,6 +52,7 @@ def run_command(
         check=check,
         capture_output=True,
         text=True,
+        timeout=timeout,
     )
 
 
@@ -67,7 +71,8 @@ def write_file(file_path: str, content: str) -> None:
 
 def read_json(file_path: str) -> Dict[str, Any]:
     """Read JSON file."""
-    return json.loads(read_file(file_path))
+    data: Dict[str, Any] = json.loads(read_file(file_path))
+    return data
 
 
 def write_json(file_path: str, data: Dict[str, Any]) -> None:

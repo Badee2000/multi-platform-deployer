@@ -181,8 +181,8 @@ class SystemChecker(BaseChecker):
 
         return CheckResult(
             name="Deployment config",
-            passed=False,
-            message="No deployment config (deployment.* / render.yaml / railway.json / vercel.json)",
+            passed=True,
+            message="No deployment config found; Render, Railway and Vercel generate one at deploy time",
             category="system",
             severity="high",
         )

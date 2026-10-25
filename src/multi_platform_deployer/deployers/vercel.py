@@ -7,6 +7,9 @@ from ..utils.helpers import file_exists
 
 class VercelDeployer(BaseDeployer):
     """Deployer for Vercel platform."""
+
+    # Files Vercel's Python runtime can detect as the app entry point.
+    ENTRY_POINTS = ("app.py", "index.py", "api/index.py", "server.py")
     
     @staticmethod
     def get_platform_name() -> str:
@@ -23,8 +26,8 @@ class VercelDeployer(BaseDeployer):
         self.logger.info("Validating Vercel deployment readiness...")
         
         checks = [
-            (self._check_vercel_json, "vercel.json configuration"),
-            (self._check_api_routes, "API routes structure"),
+            (self._check_api_routes, "Python entry point (app.py, index.py, api/index.py or server.py)"),
+            (self._check_requirements, "requirements.txt"),
         ]
         
         all_valid = True
@@ -54,15 +57,27 @@ class VercelDeployer(BaseDeployer):
     
     def deploy(self) -> bool:
         """
-        Execute Vercel deployment.
-        
-        Returns:
-            True if deployment successful
+        Deploy to production with the Vercel CLI.
+
+        Uses VERCEL_TOKEN from the environment. Returns True only if the CLI
+        exits successfully.
         """
-        self.logger.info("Deploying to Vercel...")
-        self.logger.info("Use 'vercel' command to deploy")
-        self.logger.info("Or push to your connected GitHub repository")
-        
+        token = self._require_credential("VERCEL_TOKEN")
+        if token is None:
+            return False
+
+        output = self._run_step(
+            ["vercel", "deploy", "--prod", "--yes"],
+            env={"VERCEL_TOKEN": token},
+            secrets=[token],
+        )
+        if output is None:
+            self.logger.error("Vercel deployment failed; see the output above.")
+            return False
+
+        urls = [line.strip() for line in output.splitlines() if line.strip().startswith("https://")]
+        self.deployed_url = urls[-1] if urls else None
+        self.logger.info(f"Vercel deployment finished: {self.deployed_url or 'URL not reported'}")
         return True
     
     def get_config_template(self) -> Dict[str, Any]:
@@ -85,20 +100,19 @@ class VercelDeployer(BaseDeployer):
                     "src": "/(.*)",
                     "dest": "app.py"
                 }
-            ],
-            "env": {
-                "PYTHON_VERSION": "3.9"
-            }
+            ]
         }
     
-    def _check_vercel_json(self) -> bool:
-        """Check if vercel.json exists."""
-        return file_exists(str(self.project_root / "vercel.json"))
-    
     def _check_api_routes(self) -> bool:
-        """Check if API routes are properly structured."""
-        # For Python, Vercel expects app.py as entry point
-        return file_exists(str(self.project_root / "app.py"))
+        """Check that a Python entry point Vercel can detect exists."""
+        return any(
+            file_exists(str(self.project_root / name))
+            for name in self.ENTRY_POINTS
+        )
+
+    def _check_requirements(self) -> bool:
+        """Vercel installs Python dependencies from requirements.txt."""
+        return file_exists(str(self.project_root / "requirements.txt"))
 
     def rollback(self, deployment_state: Dict[str, Any]) -> bool:
         """Redeploy restored snapshot for Vercel deployments."""

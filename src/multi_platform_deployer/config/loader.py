@@ -97,7 +97,7 @@ class ConfigLoader:
         Returns:
             Dictionary of environment variables
         """
-        env_vars = {}
+        env_vars: Dict[str, str] = {}
         env_path = self.project_root / env_file
         
         if not env_path.exists():
