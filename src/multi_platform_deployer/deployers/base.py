@@ -276,8 +276,17 @@ class BaseDeployer(ABC):
         """Get platform name."""
         pass
 
+    supports_live_rollback = False
+
+    def rollback_live(self) -> bool:
+        """Roll the running service back on the platform. Only some platforms support it."""
+        self.logger.error(
+            f"Live rollback is not supported for {self.get_platform_name()} by this tool. "
+            "Use the platform's own dashboard or CLI."
+        )
+        return False
+
     def rollback(self, deployment_state: Dict[str, Any]) -> bool:
-        """Redeploy the restored snapshot for this platform."""
         self.logger.info(
             "No custom rollback steps defined; redeploying restored snapshot."
         )

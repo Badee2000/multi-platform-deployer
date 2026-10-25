@@ -101,3 +101,23 @@ def file_exists(file_path: str) -> bool:
 def dir_exists(dir_path: str) -> bool:
     """Check if directory exists."""
     return Path(dir_path).is_dir()
+
+
+STATE_DIR = ".deployment"
+
+
+def has_uncommitted_changes(porcelain_output: str) -> bool:
+    """
+    Tell whether 'git status --porcelain' output lists real changes.
+
+    The tool's own rollback state folder is ignored. Otherwise every deploy
+    would leave the project dirty and block the next one.
+    """
+    for line in porcelain_output.splitlines():
+        if not line.strip():
+            continue
+        path = line[3:].strip().strip('"').replace("\\", "/")
+        if path == STATE_DIR or path.startswith(STATE_DIR + "/"):
+            continue
+        return True
+    return False

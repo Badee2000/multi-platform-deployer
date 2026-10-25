@@ -12,6 +12,7 @@ from __future__ import annotations
 import subprocess
 from typing import List, Tuple
 
+from ..utils.helpers import has_uncommitted_changes
 from .base import BaseChecker, CheckResult
 
 
@@ -285,7 +286,7 @@ class SystemChecker(BaseChecker):
                 severity="medium",
             )
 
-        is_clean = status.stdout.strip() == ""
+        is_clean = not has_uncommitted_changes(status.stdout)
         return CheckResult(
             name="Git workspace",
             passed=is_clean,

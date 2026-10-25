@@ -2,7 +2,7 @@
 
 from typing import Dict, Any
 from .base import BaseDeployer
-from ..utils.helpers import file_exists
+from ..utils.helpers import file_exists, has_uncommitted_changes
 
 
 class HerokuDeployer(BaseDeployer):
@@ -77,7 +77,7 @@ class HerokuDeployer(BaseDeployer):
         if status is None:
             self.logger.error("Could not read git status. Is this project a git repository?")
             return False
-        if status.strip():
+        if has_uncommitted_changes(status):
             self.logger.error(
                 "Uncommitted changes would not be deployed. Commit them first, then run again."
             )

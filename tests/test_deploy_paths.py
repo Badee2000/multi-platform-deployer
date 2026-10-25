@@ -213,6 +213,22 @@ def test_render_refuses_uncommitted_changes(tmp_path, fake_cli, fake_http, monke
     assert fake_http["calls"] == []
 
 
+def test_render_ignores_its_own_state_folder(tmp_path, fake_cli, fake_http, monkeypatch):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    _render_git_responses(fake_cli, status="?? .deployment/\n")
+    fake_http["queue"].extend([FakeResponse(201, {}), FakeResponse(200, {})])
+
+    assert RenderDeployer(str(tmp_path), {"render_service_id": "srv-9"}).deploy() is True
+
+
+def test_render_still_refuses_real_changes_next_to_state_folder(tmp_path, fake_cli, fake_http, monkeypatch):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    _render_git_responses(fake_cli, status="?? .deployment/\n M app.py\n")
+
+    assert RenderDeployer(str(tmp_path), {"render_service_id": "srv-9"}).deploy() is False
+    assert fake_http["calls"] == []
+
+
 def test_render_refuses_unpushed_commits(tmp_path, fake_cli, fake_http, monkeypatch):
     monkeypatch.setenv("RENDER_API_KEY", SECRET)
     _render_git_responses(fake_cli, unpushed="2\n")
@@ -231,7 +247,7 @@ def test_render_creates_service_and_reports_url(tmp_path, fake_cli, fake_http, m
             {"service": {"id": "srv-1", "serviceDetails": {"url": "https://app.onrender.com"}}},
         )
     )
-    deployer = RenderDeployer(str(tmp_path), {"app_name": "My App"})
+    deployer = RenderDeployer(str(tmp_path), {"app_name": "My App", "start_command": "gunicorn app:app"})
 
     assert deployer.deploy() is True
     assert deployer.deployed_url == "https://app.onrender.com"
@@ -242,8 +258,76 @@ def test_render_creates_service_and_reports_url(tmp_path, fake_cli, fake_http, m
     assert call["json"]["repo"] == "https://github.com/acme/app"
     assert call["json"]["ownerId"] == "own-1"
     assert call["json"]["name"] == "my-app"
-    assert call["json"]["autoDeploy"] == "yes"
+    assert call["json"]["autoDeployTrigger"] == "commit"
+    assert call["json"]["serviceDetails"]["runtime"] == "python"
+    assert call["json"]["serviceDetails"]["envSpecificDetails"]["startCommand"] == "gunicorn app:app"
 
+
+def test_render_refuses_to_create_without_start_command(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    monkeypatch.setenv("RENDER_OWNER_ID", "own-1")
+    _render_git_responses(fake_cli)
+
+    with caplog.at_level("ERROR"):
+        assert RenderDeployer(str(tmp_path)).deploy() is False
+    assert fake_http["calls"] == []
+    assert "start_command" in caplog.text
+    assert SECRET not in caplog.text
+
+
+@pytest.mark.parametrize("blank", ["", "   ", None])
+def test_render_treats_blank_start_command_as_missing(tmp_path, fake_cli, fake_http, monkeypatch, blank):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    monkeypatch.setenv("RENDER_OWNER_ID", "own-1")
+    _render_git_responses(fake_cli)
+
+    assert RenderDeployer(str(tmp_path), {"start_command": blank}).deploy() is False
+    assert fake_http["calls"] == []
+
+
+@pytest.mark.parametrize("command", ["python app.py", "flask run", "python manage.py runserver 0.0.0.0:$PORT"])
+def test_render_warns_about_dev_server_but_respects_choice(
+    tmp_path, fake_cli, fake_http, monkeypatch, caplog, command
+):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    monkeypatch.setenv("RENDER_OWNER_ID", "own-1")
+    _render_git_responses(fake_cli)
+    fake_http["queue"].append(FakeResponse(201, {"service": {"id": "srv-1"}}))
+
+    with caplog.at_level("WARNING"):
+        assert RenderDeployer(str(tmp_path), {"start_command": command}).deploy() is True
+    assert "development server" in caplog.text
+    assert fake_http["calls"][0]["json"]["serviceDetails"]["envSpecificDetails"]["startCommand"] == command
+
+
+def test_render_production_command_gets_no_warning(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    monkeypatch.setenv("RENDER_OWNER_ID", "own-1")
+    _render_git_responses(fake_cli)
+    fake_http["queue"].append(FakeResponse(201, {"service": {"id": "srv-1"}}))
+
+    with caplog.at_level("WARNING"):
+        deployer = RenderDeployer(str(tmp_path), {"start_command": "gunicorn wsgi:app"})
+        assert deployer.deploy() is True
+    assert "development server" not in caplog.text
+
+
+def test_render_redeploy_does_not_need_start_command(tmp_path, fake_cli, fake_http, monkeypatch):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    _render_git_responses(fake_cli)
+    fake_http["queue"].extend([FakeResponse(201, {}), FakeResponse(200, {})])
+
+    assert RenderDeployer(str(tmp_path), {"render_service_id": "srv-9"}).deploy() is True
+
+
+def test_render_dry_run_warns_when_start_command_missing(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
+    monkeypatch.delenv("RENDER_API_KEY", raising=False)
+    monkeypatch.delenv("RENDER_OWNER_ID", raising=False)
+
+    with caplog.at_level("WARNING"):
+        assert RenderDeployer(str(tmp_path), dry_run=True).deploy() is True
+    assert "start_command" in caplog.text
+    assert fake_http["calls"] == []
 
 def test_render_redeploys_configured_service(tmp_path, fake_cli, fake_http, monkeypatch):
     monkeypatch.setenv("RENDER_API_KEY", SECRET)
@@ -269,7 +353,7 @@ def test_render_api_error_hides_key(tmp_path, fake_cli, fake_http, monkeypatch, 
     fake_http["queue"].append(FakeResponse(401, text=f"bad token {SECRET}"))
 
     with caplog.at_level("ERROR"):
-        assert RenderDeployer(str(tmp_path)).deploy() is False
+        assert RenderDeployer(str(tmp_path), {"start_command": "gunicorn app:app"}).deploy() is False
     assert SECRET not in caplog.text
     assert "HTTP 401" in caplog.text
 
@@ -288,3 +372,232 @@ def test_render_dry_run_makes_no_requests(tmp_path, fake_cli, fake_http, monkeyp
     assert RenderDeployer(str(tmp_path), dry_run=True).deploy() is True
     assert fake_http["calls"] == []
     assert fake_cli.calls == []
+
+
+# --- Render live rollback (REST API) ------------------------------------------
+
+
+def _deploy(deploy_id, status, created, trigger="new_commit", message="change"):
+    return {
+        "deploy": {
+            "id": deploy_id,
+            "status": status,
+            "createdAt": created,
+            "trigger": trigger,
+            "commit": {"id": "abc", "message": message},
+        },
+        "cursor": deploy_id,
+    }
+
+
+def _rollback_deployer(tmp_path, **kwargs):
+    return RenderDeployer(str(tmp_path), {"render_service_id": "srv-1"}, **kwargs)
+
+
+def test_render_rollback_targets_previous_successful_deploy(tmp_path, fake_cli, fake_http, monkeypatch):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    fake_http["queue"].extend(
+        [
+            FakeResponse(
+                200,
+                [
+                    _deploy("dpl-3", "live", "2026-01-03T00:00:00Z"),
+                    _deploy("dpl-2", "deactivated", "2026-01-02T00:00:00Z"),
+                    _deploy("dpl-1", "deactivated", "2026-01-01T00:00:00Z"),
+                ],
+            ),
+            FakeResponse(201, {"id": "dpl-4"}),
+        ]
+    )
+
+    assert _rollback_deployer(tmp_path).rollback_live() is True
+    get_call, post_call = fake_http["calls"]
+    assert get_call["method"] == "GET" and "/services/srv-1/deploys" in get_call["url"]
+    assert post_call["method"] == "POST" and post_call["url"].endswith("/services/srv-1/rollback")
+    assert post_call["json"] == {"deployId": "dpl-2"}
+    assert not any(c["url"].endswith("/deploys") and c["method"] == "POST" for c in fake_http["calls"])
+    assert fake_cli.calls == []
+
+
+def test_render_rollback_skips_failed_builds(tmp_path, fake_cli, fake_http, monkeypatch):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    fake_http["queue"].extend(
+        [
+            FakeResponse(
+                200,
+                [
+                    _deploy("dpl-4", "build_failed", "2026-01-04T00:00:00Z"),
+                    _deploy("dpl-3", "live", "2026-01-03T00:00:00Z"),
+                    _deploy("dpl-2", "update_failed", "2026-01-02T12:00:00Z"),
+                    _deploy("dpl-1", "deactivated", "2026-01-01T00:00:00Z"),
+                ],
+            ),
+            FakeResponse(201, {}),
+        ]
+    )
+
+    assert _rollback_deployer(tmp_path).rollback_live() is True
+    assert fake_http["calls"][1]["json"] == {"deployId": "dpl-1"}
+
+
+def test_render_rollback_without_previous_deploy_does_nothing(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    fake_http["queue"].append(FakeResponse(200, [_deploy("dpl-1", "live", "2026-01-01T00:00:00Z")]))
+
+    with caplog.at_level("ERROR"):
+        assert _rollback_deployer(tmp_path).rollback_live() is False
+    assert [c["method"] for c in fake_http["calls"]] == ["GET"]
+    assert "No earlier successful deploy" in caplog.text
+
+
+def test_render_rollback_with_no_deploys_at_all(tmp_path, fake_cli, fake_http, monkeypatch):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    fake_http["queue"].append(FakeResponse(200, []))
+
+    assert _rollback_deployer(tmp_path).rollback_live() is False
+    assert [c["method"] for c in fake_http["calls"]] == ["GET"]
+
+
+def test_render_rollback_refuses_to_flip_back_after_a_rollback(tmp_path, fake_cli, fake_http, monkeypatch):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    fake_http["queue"].append(
+        FakeResponse(
+            200,
+            [
+                _deploy("dpl-3", "live", "2026-01-03T00:00:00Z", trigger="rollback"),
+                _deploy("dpl-2", "deactivated", "2026-01-02T00:00:00Z"),
+                _deploy("dpl-1", "deactivated", "2026-01-01T00:00:00Z"),
+            ],
+        )
+    )
+
+    assert _rollback_deployer(tmp_path).rollback_live() is False
+    assert [c["method"] for c in fake_http["calls"]] == ["GET"]
+
+
+def test_render_rollback_needs_service_id(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+
+    with caplog.at_level("ERROR"):
+        assert RenderDeployer(str(tmp_path)).rollback_live() is False
+    assert "render_service_id" in caplog.text
+    assert fake_http["calls"] == []
+
+
+def test_render_rollback_needs_api_key(tmp_path, fake_cli, fake_http, monkeypatch):
+    monkeypatch.delenv("RENDER_API_KEY", raising=False)
+
+    assert _rollback_deployer(tmp_path).rollback_live() is False
+    assert fake_http["calls"] == []
+
+
+def test_render_rollback_api_error_is_reported_and_hides_key(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    fake_http["queue"].extend(
+        [
+            FakeResponse(
+                200,
+                [
+                    _deploy("dpl-2", "live", "2026-01-02T00:00:00Z"),
+                    _deploy("dpl-1", "deactivated", "2026-01-01T00:00:00Z"),
+                ],
+            ),
+            FakeResponse(400, text=f"artifact gone {SECRET}"),
+        ]
+    )
+
+    with caplog.at_level("ERROR"):
+        assert _rollback_deployer(tmp_path).rollback_live() is False
+    assert "HTTP 400" in caplog.text
+    assert SECRET not in caplog.text
+
+
+def test_render_rollback_warns_that_autodeploy_stays_on(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    fake_http["queue"].extend(
+        [
+            FakeResponse(
+                200,
+                [
+                    _deploy("dpl-2", "live", "2026-01-02T00:00:00Z"),
+                    _deploy("dpl-1", "deactivated", "2026-01-01T00:00:00Z"),
+                ],
+            ),
+            FakeResponse(201, {}),
+        ]
+    )
+
+    with caplog.at_level("WARNING"):
+        assert _rollback_deployer(tmp_path).rollback_live() is True
+    assert "Autodeploy is still ON" in caplog.text
+
+
+def test_render_rollback_dry_run_makes_no_requests(tmp_path, fake_cli, fake_http, monkeypatch):
+    monkeypatch.delenv("RENDER_API_KEY", raising=False)
+
+    assert _rollback_deployer(tmp_path, dry_run=True).rollback_live() is True
+    assert fake_http["calls"] == []
+
+
+def test_render_rollback_method_never_redeploys_current_code(tmp_path, fake_cli, fake_http, monkeypatch):
+    """The old behavior called deploy(), which could create a new service."""
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    fake_http["queue"].append(FakeResponse(200, []))
+
+    assert _rollback_deployer(tmp_path).rollback({"platform": "render"}) is False
+    assert [c["method"] for c in fake_http["calls"]] == ["GET"]
+    assert fake_cli.calls == []
+
+
+def test_platforms_without_live_rollback_say_so(tmp_path, fake_cli, caplog):
+    with caplog.at_level("ERROR"):
+        assert VercelDeployer(str(tmp_path)).rollback_live() is False
+    assert "not supported" in caplog.text
+    assert VercelDeployer.supports_live_rollback is False
+    assert RenderDeployer.supports_live_rollback is True
+    assert fake_cli.calls == []
+
+
+def _write_project(tmp_path, with_record=True):
+    (tmp_path / "deployment.yaml").write_text(
+        "platform: render\nstart_command: gunicorn app:app\nrender_service_id: srv-1\n", encoding="utf-8"
+    )
+    if with_record:
+        record = tmp_path / ".deployment"
+        record.mkdir()
+        (record / "render_1.json").write_text(
+            '{"id": "render_1", "platform": "render", "timestamp": "2026-01-01T00:00:00+00:00"}',
+            encoding="utf-8",
+        )
+
+
+def test_deployer_rollback_live_uses_platform_from_latest_record(tmp_path, fake_cli, fake_http, monkeypatch):
+    from multi_platform_deployer import Deployer
+
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    _write_project(tmp_path)
+    fake_http["queue"].extend(
+        [
+            FakeResponse(
+                200,
+                [
+                    _deploy("dpl-2", "live", "2026-01-02T00:00:00Z"),
+                    _deploy("dpl-1", "deactivated", "2026-01-01T00:00:00Z"),
+                ],
+            ),
+            FakeResponse(201, {}),
+        ]
+    )
+
+    assert Deployer(str(tmp_path)).rollback_live() is True
+    assert fake_http["calls"][1]["json"] == {"deployId": "dpl-1"}
+
+
+def test_deployer_rollback_live_without_records_fails_cleanly(tmp_path, fake_cli, fake_http, monkeypatch):
+    from multi_platform_deployer import Deployer
+
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    _write_project(tmp_path, with_record=False)
+
+    assert Deployer(str(tmp_path)).rollback_live() is False
+    assert fake_http["calls"] == []

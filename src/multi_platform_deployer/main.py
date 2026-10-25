@@ -481,6 +481,28 @@ class Deployer:
             return deployer.rollback(state)
 
         return self.rollback_manager.rollback_to_previous(_redeploy_previous)
+
+    def rollback_live(self, platform: Optional[str] = None) -> bool:
+        """
+        Roll back the running service on its platform, without touching local files.
+
+        Uses the platform from the most recent deployment record unless one is given.
+        Returns False for platforms without a real live rollback.
+        """
+        if platform is None:
+            records = self.rollback_manager.list_deployment_records()
+            if not records:
+                self.logger.error("No deployment record found. Pass the platform explicitly.")
+                return False
+            platform = str(records[0].get("platform", ""))
+        if not platform:
+            self.logger.error("Deployment record has no platform information")
+            return False
+
+        deployer = self.deployers.get(platform.lower()) or self.initialize_deployer(platform.lower())
+        if not deployer:
+            return False
+        return deployer.rollback_live()
     
     def print_summary(self) -> None:
         """Print deployment summary."""

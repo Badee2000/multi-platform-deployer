@@ -2,15 +2,16 @@
 
 import os
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 import requests
 
 from .base import BaseDeployer
-from ..utils.helpers import file_exists
+from ..utils.helpers import file_exists, has_uncommitted_changes
 
 RENDER_API_BASE = "https://api.render.com/v1"
 REQUEST_TIMEOUT = 30  # seconds per API call
+DEV_SERVER_PATTERN = re.compile(r"^\s*python3?\s+\S+\.py\b|\bflask\s+run\b|\brunserver\b")
 
 
 class RenderDeployer(BaseDeployer):
@@ -86,7 +87,7 @@ class RenderDeployer(BaseDeployer):
         if status is None:
             self.logger.error("Render needs a git repository. Run 'git init' and push to GitHub or GitLab.")
             return False
-        if status.strip():
+        if has_uncommitted_changes(status):
             self.logger.error("Uncommitted changes would not be deployed. Commit them and push first.")
             return False
         if self.dry_run:
@@ -101,8 +102,39 @@ class RenderDeployer(BaseDeployer):
             return False
         return True
 
+    def _resolve_start_command(self) -> Optional[str]:
+        """
+        Return the configured start command, or None when a real deploy must stop.
+
+        No single default fits Flask, Django and FastAPI, and a wrong guess only
+        fails after the service already exists on Render, so it must be explicit.
+        """
+        command = str(self.config.get("start_command") or "").strip()
+        if not command:
+            message = (
+                "No 'start_command' in your config. Render needs a production start command, for example: "
+                "Flask 'gunicorn app:app', Django 'gunicorn <project>.wsgi', "
+                "FastAPI 'uvicorn main:app --host 0.0.0.0 --port $PORT'. "
+                "Add it to deployment.yaml and make sure the server is in requirements.txt."
+            )
+            if self.dry_run:
+                self.logger.warning(f"[dry-run] {message}")
+                return "<start_command required>"
+            self.logger.error(message)
+            return None
+
+        if DEV_SERVER_PATTERN.search(command):
+            self.logger.warning(
+                f"'{command}' looks like a development server. Use gunicorn or uvicorn for production."
+            )
+        return command
+
     def _create_service(self, api_key: str) -> bool:
         """Create a new Render web service from the current git branch."""
+        start_command = self._resolve_start_command()
+        if start_command is None:
+            return False
+
         owner_id = self._resolve_owner_id(api_key)
         if owner_id is None:
             return False
@@ -118,14 +150,14 @@ class RenderDeployer(BaseDeployer):
             "ownerId": owner_id,
             "repo": repo_url,
             "branch": branch.strip(),
-            "autoDeploy": "yes",
+            "autoDeployTrigger": "commit",
             "serviceDetails": {
-                "env": "python",
+                "runtime": "python",
                 "region": str(self.config.get("render_region", "oregon")),
                 "plan": str(self.config.get("render_plan", "free")),
                 "envSpecificDetails": {
                     "buildCommand": "pip install -r requirements.txt",
-                    "startCommand": str(self.config.get("start_command", "python app.py")),
+                    "startCommand": start_command,
                 },
             },
         }
@@ -264,7 +296,7 @@ class RenderDeployer(BaseDeployer):
                     "env": "python",
                     "plan": "free",
                     "buildCommand": "pip install -r requirements.txt",
-                    "startCommand": "python app.py",
+                    "startCommand": self.config.get("start_command", "gunicorn app:app"),
                 }
             ]
         }
@@ -281,10 +313,87 @@ class RenderDeployer(BaseDeployer):
         """Environment variables must be set in the Render dashboard; they are not uploaded from .env."""
         return True
 
+    supports_live_rollback = True
+
     def rollback(self, deployment_state: Dict[str, Any]) -> bool:
-        """Redeploy restored snapshot for Render deployments."""
-        self.logger.info("Triggering Render redeployment of restored snapshot...")
+        """Roll the live service back through Render's API. Never redeploys current code."""
+        return self.rollback_live()
+
+    def rollback_live(self) -> bool:
+        """
+        Roll the Render service back to its most recent earlier successful deploy.
+
+        Uses Render's rollback API, which reuses the old build artifact, so no
+        rebuild happens. It does not disable autodeploys: a later commit pushed
+        to the linked branch will deploy again.
+        """
+        api_key = self._require_credential("RENDER_API_KEY")
+        if api_key is None:
+            return False
+
+        service_id = self.config.get("render_service_id")
+        if not service_id:
+            self.logger.error(
+                "Rollback needs 'render_service_id' in your deployment config "
+                "(printed by the first deploy, also shown in the Render dashboard URL)."
+            )
+            return False
+
+        list_path = f"/services/{service_id}/deploys?limit=20"
+        if self.dry_run:
+            self._api("GET", list_path, api_key)
+            self._api("POST", f"/services/{service_id}/rollback", api_key, {"deployId": "<previous deploy id>"})
+            return True
+
+        items = self._api("GET", list_path, api_key)
+        if items is None:
+            return False
+
+        target = self._pick_rollback_target(items if isinstance(items, list) else [])
+        if target is None:
+            self.logger.error(
+                "No earlier successful deploy to roll back to. Either there is only one deploy, "
+                "the live deploy is already a rollback, or Render no longer keeps the older build. "
+                "Pick a deploy manually in the Render dashboard (service > Deploys > Rollback)."
+            )
+            return False
+
+        message = str((target.get("commit") or {}).get("message", "")).strip().splitlines()
         self.logger.info(
-            "Push the restored code or click 'Manual Deploy' inside Render dashboard."
+            f"Rolling back to deploy {target['id']} "
+            f"(created {target.get('createdAt', 'unknown')}, commit: {message[0][:60] if message else 'n/a'})."
         )
-        return super().rollback(deployment_state)
+        if self._api("POST", f"/services/{service_id}/rollback", api_key, {"deployId": target["id"]}) is None:
+            return False
+
+        self.logger.info("Render accepted the rollback. Watch the service's Events tab until it is live.")
+        self.logger.warning(
+            "Autodeploy is still ON. A new commit on the linked branch will deploy again and may "
+            "undo this rollback. Turn it off in the Render dashboard (Settings) if needed."
+        )
+        return True
+
+    @staticmethod
+    def _pick_rollback_target(items: List[Any]) -> Optional[Dict[str, Any]]:
+        """
+        Choose the newest deactivated deploy that is older than the live one.
+
+        Returns None when the live deploy was itself created by a rollback, so
+        repeating the command cannot flip back and forth to the bad build.
+        """
+        deploys = [(item.get("deploy") or item) for item in items if isinstance(item, dict)]
+        deploys = [d for d in deploys if isinstance(d, dict) and d.get("id")]
+        deploys.sort(key=lambda d: str(d.get("createdAt", "")), reverse=True)
+
+        live = next((d for d in deploys if d.get("status") == "live"), None)
+        if live is not None and live.get("trigger") == "rollback":
+            return None
+        cutoff = str(live.get("createdAt", "")) if live else ""
+
+        for deploy in deploys:
+            if deploy.get("status") != "deactivated":
+                continue
+            if cutoff and str(deploy.get("createdAt", "")) >= cutoff:
+                continue
+            return deploy
+        return None

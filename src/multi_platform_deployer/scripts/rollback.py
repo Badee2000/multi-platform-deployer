@@ -79,6 +79,10 @@ class RollbackManager:
         records.sort(key=lambda record: str(record.get("timestamp", "")), reverse=True)
         return records
 
+    def list_deployment_records(self) -> List[dict]:
+        """Return saved deployment records, newest first."""
+        return self._load_deployment_records()
+
     def get_previous_deployment(self) -> Optional[dict]:
         """Return the deployment that was live before the most recent checkpoint.
 

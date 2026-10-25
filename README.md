@@ -133,16 +133,90 @@ Add `--dry-run` to any of these to preview. A real deploy exits non-zero on fail
 ### Things to know before a real deploy
 - **Git:** Render and Heroku deploy committed code. Commit and push first; the deployer refuses a dirty working tree (and, for Render, an unpushed `origin`). Heroku also needs a `heroku` remote (`heroku git:remote -a <app>`). Railway and Vercel deploy your local files.
 - **Secrets are not uploaded.** Local `.env` values are never sent to a platform. Set them in the platform dashboard (Render: Environment; Railway: Variables; Vercel: Project Settings > Environment Variables) or with `heroku config:set`.
-- **Production server:** the default Render start command is `python app.py`, which runs the Flask development server. For production, add `gunicorn` to `requirements.txt` and set `start_command: gunicorn wsgi:app` in `deployment.yaml`. Heroku uses your `Procfile` instead.
+- **Production server:** Render has no default start command. A first deploy stops until you set `start_command` in `deployment.yaml` (for example `gunicorn wsgi:app`) and add the server to `requirements.txt`. Heroku uses your `Procfile` instead.
 - **Railway URL:** `railway up` does not print a stable URL. Run `railway domain` to get it. If the CLI reports no linked project, run `railway link` once.
 - **Render service ID:** the first real deploy creates the service and prints its ID. Add `render_service_id: <id>` to `deployment.yaml` so later runs redeploy that service instead of creating a new one.
 - **Vercel config:** if `vercel.json` is missing, the deployer generates one that uses `@vercel/python` with `app.py`.
 - **Verify:** `py deploy.py health --url https://your-app.example.com`.
 
 ### Known limitations
-- The deployers are covered by mocked tests. Live calls to Render, Railway, Vercel, and Heroku have not been verified end to end. Make your first real deploy to a throwaway app.
-- The Python 3.8 to 3.10 runtimes are not tested.
+- Live status: verified so far on Render with a Flask project: service creation, build, the post-deploy `health` check, a redeploy of the same service via `render_service_id`, and a live rollback (2026-10-25). Railway, Vercel and Heroku have not been run live at all. The rest is covered by mocked tests. Make your first real deploy to a throwaway app.
+- Requires Python 3.10 or newer. Python 3.8 and 3.9 are no longer supported (both are end of life, and the code was never tested on them). Tests run in CI on Python 3.10 to 3.14, on Linux and Windows.
 - Railway and Heroku token behavior depends on each vendor's CLI. The live read-only checks (see [Testing](#testing)) confirm the credential works before you deploy.
+
+## Walkthrough: Deploy a Flask App to Render
+
+This is the exact flow used to create a Render service from a small Flask project. Run it on a throwaway app first. Commands are PowerShell; on macOS or Linux use `export NAME=value` instead of `$env:NAME = "value"`.
+
+**What you need:** Python 3.10+, `git`, a GitHub account, a Render account, and `pip install multi-platform-deployer` (or the source install above).
+
+### 1. Prepare the app
+- `requirements.txt` lists a production server, for example `Flask==3.1.3` and `gunicorn==26.2.0`.
+- Read secrets from the environment. Do not hardcode them. Example: `SECRET_KEY = os.environ["SECRET_KEY"]`.
+- Optional but useful: a `/health` route, and a pinned Python version (set it as Render documents; this project does not verify how Render reads it).
+- Add `.env` and `.deployment/` to `.gitignore`. The deployer stores its rollback state in `.deployment/`.
+
+### 2. Add `deployment.yaml`
+```yaml
+platform: render
+app_name: my-flask-app
+start_command: gunicorn wsgi:app
+```
+`start_command` is required for the first Render deploy. Use the module and variable that match your app (`wsgi:app` means a `wsgi.py` file that exposes `app`). Django uses `gunicorn <project>.wsgi:application`, and FastAPI uses `uvicorn main:app --host 0.0.0.0 --port $PORT`.
+
+### 3. Push the project to GitHub
+Render builds from your git remote, not your local folder. Commit everything, set `origin`, and push:
+```powershell
+git remote add origin https://github.com/<you>/<repo>.git
+git push -u origin main
+```
+The deployer refuses to run with uncommitted changes or unpushed commits. A public repo needs no extra setup. For a private repo, connect GitHub to your Render account first (not tested here).
+
+### 4. Create a Render API key
+In Render: **Account Settings > API Keys > Create API Key**. Then set it in the terminal you will deploy from:
+```powershell
+$env:RENDER_API_KEY = Read-Host "Render key"
+```
+- The variable exists only in that terminal window. A new window needs it set again, otherwise the deploy stops with `RENDER_API_KEY is not set` and nothing is created.
+- Never paste the key into a file in your project (including `.env.example`) or into a chat or issue. If it leaks, revoke it in Render and create a new one.
+
+### 5. Check and preview
+```powershell
+multi-platform-deployer check
+multi-platform-deployer run --platform render --dry-run
+```
+The dry run prints what would happen and executes nothing. It should not warn that the key is missing.
+
+### 6. Deploy
+```powershell
+multi-platform-deployer run --platform render
+```
+On success the tool prints the new service ID and URL:
+```
+Created Render service srv-xxxxxxxxxxxxxxxxxxxx.
+URL: https://my-flask-app.onrender.com
+```
+It creates a free-plan web service with auto-deploy on new commits. Change the plan or region with `render_plan` and `render_region` in `deployment.yaml`.
+
+### 7. Set secrets in Render
+The tool never uploads secrets. Open the service in the Render dashboard, go to **Environment**, and add `SECRET_KEY` (and anything else your app reads). Saving redeploys the service. Until you do this, an app that requires `SECRET_KEY` will build but crash on start.
+
+### 8. Verify
+The tool does not check health after deploying. Wait for the service to show **Live**, then:
+```powershell
+multi-platform-deployer health --url https://my-flask-app.onrender.com
+```
+Free-plan services sleep when idle, so the first request can be slow.
+
+### 9. Redeploy later
+Add the service ID to `deployment.yaml`, commit, push, and run the deploy again. It then redeploys the same service instead of creating a new one:
+```yaml
+render_service_id: srv-xxxxxxxxxxxxxxxxxxxx
+```
+The redeploy path is verified live on Render with the Flask example (the same service was updated, no duplicate created).
+
+### 10. Clean up (for test apps)
+Delete the service in the Render dashboard so it does not keep running, and revoke the API key if you created it only for this test.
 
 ## Get Started in 3 Steps
 
@@ -218,7 +292,8 @@ Everything is straightforward. Here's what you can do:
 | `py deploy.py info` | Show info about your project |
 | `py deploy.py health --url <url>` | Check if deployed app is healthy |
 | `py deploy.py health --url <url> --endpoints "/,/api,/health"` | Check specific endpoints |
-| `py deploy.py rollback` | Go back to the previous deployment |
+| `py deploy.py rollback` | Restore the previous project files (does not change the live deployment) |
+| `py deploy.py rollback --live` | Roll back the running Render service to its previous successful deploy |
 | `py deploy.py --help` | See all commands |
 
 ---
@@ -392,11 +467,11 @@ py deploy.py run --platform render
 **What it does:**
 - Creates a web service from your `origin` git remote (or triggers a deploy when `render_service_id` is set)
 - Build command: `pip install -r requirements.txt`
-- Start command: `start_command` from your config, default `python app.py`
+- Start command: `start_command` from your config. **Required** for the first deploy, because no one default fits Flask, Django and FastAPI. The deploy stops before any API call if it is missing. A dev-server command (`python app.py`, `flask run`, `runserver`) is accepted with a warning.
 - Requires a clean git working tree and an `origin` remote. Only committed code is deployed.
 - Needs `RENDER_API_KEY` (and optionally `RENDER_OWNER_ID`)
 
-> The default start command runs the Flask/FastAPI development server. For production, set `start_command: gunicorn wsgi:app` in `deployment.yaml` and add `gunicorn` to `requirements.txt`.
+> Examples: Flask `gunicorn wsgi:app`, Django `gunicorn <project>.wsgi`, FastAPI `uvicorn main:app --host 0.0.0.0 --port $PORT`. Add the server package to `requirements.txt`.
 
 ### Railway
 Best for: Apps that need the Railway runtime
@@ -472,18 +547,32 @@ This checks:
 It does not check response times or database connectivity. The database is reported as `NOT CHECKED`. The command exits with a non-zero code if the server is not healthy.
 
 ### Rollback
-Deployed something broken? Go back instantly:
+Deployed something broken? There are two kinds of rollback.
 
+**Live rollback (Render only):**
+```bash
+py deploy.py rollback --live --dry-run   # preview the API calls, change nothing
+py deploy.py rollback --live             # asks for confirmation, then rolls back
+```
+This uses Render's rollback API to put the running service back on its most recent earlier successful deploy. Render reuses the old build, so no rebuild is needed. It needs `RENDER_API_KEY` and `render_service_id` in `deployment.yaml`, and it does not touch your local files.
+- It picks the newest earlier deploy that was live before. Failed builds are skipped.
+- If the live deploy is itself a rollback, the command stops instead of flipping back to the bad build. Choose a deploy in the Render dashboard (service > Deploys) in that case.
+- If there is no earlier successful deploy, or Render no longer keeps its build, nothing is changed and the command exits non-zero.
+- **Autodeploy stays on.** The next commit pushed to the linked branch deploys again and may undo the rollback. Turn autodeploy off in the Render dashboard (Settings) if you need the rollback to hold.
+- Other platforms print "not supported" and exit non-zero. Use their own dashboard or CLI.
+
+**File rollback (default, any platform):**
 ```bash
 py deploy.py rollback
 ```
-
 After every successful deployment record, the project files are snapshotted
 (`.env` files are never included). A rollback restores the snapshot from the
 deployment before the most recent one. It restores **files only**: the live
 deployment on your platform is not changed, so you must redeploy the restored
 code yourself. The command exits with a non-zero code if no previous snapshot
 exists or the restore fails.
+
+Live rollback was run once against a real Render service (the Flask example): Render accepted the request, chose the expected earlier deploy, and the service stayed healthy. The deploys in that test ran identical code, so it proves the API call works, not that different older code comes back. The "refuses to roll back twice" guard is covered by mocked tests only.
 
 ### Deploy to Multiple Platforms
 Want your app on Render AND Railway for redundancy?
@@ -511,11 +600,12 @@ COMMANDS:
   run                Deploy your app (interactive, or --platform for one platform)
   info               Show project information
   health             Check deployed app health
-  rollback           Rollback to previous deployment
+  rollback           Rollback to previous deployment (--live: roll back the running Render service)
 
 OPTIONS:
   --platform NAME    Deploy to one platform without prompts (render, railway, vercel, heroku)
-  --dry-run          With --platform: print the commands and checks, run nothing
+  --dry-run          With --platform (run) or --live (rollback): print what would happen, change nothing
+  --live             With rollback: roll back the running service on its platform (Render only)
   --migrate          With --platform: run Django/Alembic migrations first
   --multi            Deploy to multiple platforms
   --url URL          App URL for health check
@@ -529,7 +619,8 @@ EXAMPLES:
   py deploy.py run --multi                        # Deploy to multiple platforms
   py deploy.py info                               # Show project info
   py deploy.py health --url https://...           # Check health
-  py deploy.py rollback                           # Rollback deployment
+  py deploy.py rollback                           # Restore the previous project files
+  py deploy.py rollback --live --dry-run          # Preview a live Render rollback
 ```
 
 ---
@@ -638,6 +729,16 @@ export HEROKU_API_KEY=your_key_here
 # For Render
 export RENDER_API_KEY=your_key_here
 ```
+Set it in the same terminal you deploy from. A variable set in one terminal window is not visible in another. In PowerShell: `$env:RENDER_API_KEY = "your_key_here"`.
+
+### "No 'start_command' in your config" (Render)
+The first Render deploy needs a production start command, and there is no default. Add it to `deployment.yaml`, for example `start_command: gunicorn wsgi:app`, and make sure `gunicorn` is in `requirements.txt`.
+
+### "Uncommitted changes would not be deployed" / "commit(s) are not pushed"
+Render and Heroku deploy committed code. Run `git status`, commit your changes, and `git push`. The tool's own `.deployment/` folder is ignored by this check.
+
+### Render service was created but the app does not start
+Open the service's **Logs** in the Render dashboard. A common cause is a missing environment variable. The tool does not upload secrets, so add them under **Environment** (for example `SECRET_KEY`). Saving redeploys the service.
 
 ### "Health check failed: Connection refused"
 Your app isn't responding. Check:
@@ -717,10 +818,10 @@ A: We never store your credentials or deploy to anything without your explicit p
 A: Typically 30 seconds to 2 minutes depending on the platform and your app size.
 
 **Q: Can I rollback?**
-A: It restores the previous project snapshot's files. It does not change the live deployment, so you must redeploy afterwards.
+A: On Render, yes: `rollback --live` uses Render's rollback API (mocked-tested, not yet verified on a real account). On other platforms, `rollback` only restores the previous project snapshot's files. It does not change the live deployment, so you must redeploy afterwards.
 
 **Q: Is this production-ready?**
-A: Not yet. Rollback and exit codes are now tested, but real platform deployment is not implemented, and some health checks are placeholders.
+A: Not yet. Real deploys exist for all four platforms, but only Render has been verified live (create, build, health check and redeploy, using a Flask example). Railway, Vercel and Heroku are mocked-tested only, and some health checks are placeholders.
 
 ---
 

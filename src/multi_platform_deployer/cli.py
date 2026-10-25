@@ -193,8 +193,7 @@ def deploy(
     print(f"\n✅ DEPLOYMENT SUCCESSFUL on {platform.upper()}!\n")
     if interactive and ask_yes_no("Check application health?"):
         url = input("Enter your app URL: ").strip()
-        health = deployer.check_health(url)
-        deployer.health_checker.print_summary(health)
+        deployer.check_health(url)
     return True
 
 
@@ -456,7 +455,7 @@ COMMANDS:
     run                Deploy your app (use --multi for multiple platforms)
     info               Show project information
     health             Check deployed app health
-    rollback           Rollback to previous deployment
+    rollback           Rollback to previous deployment (--live: roll back the running Render service)
 
 EXAMPLES:
     py deploy.py setup
@@ -466,11 +465,13 @@ EXAMPLES:
     py deploy.py info
     py deploy.py health --url https://...
     py deploy.py rollback
+    py deploy.py rollback --live --dry-run
 
 OPTIONS:
     --multi            Deploy to multiple platforms (with 'run')
     --url URL          App URL for health check
     --endpoints PATHS  Comma-separated endpoints to check (default: /)
+    --live             With 'rollback': roll back the running service on the platform (Render only)
     -h, --help         Show this help message
 
 WORKFLOW:
@@ -522,12 +523,32 @@ def cmd_health(args: argparse.Namespace) -> int:
         else ["/"]
     )
     print(f"\n🏥 Checking health of {url}...")
-    health = deployer.check_health(url, endpoints)
-    deployer.health_checker.print_summary(health)
+    health = deployer.check_health(url, endpoints)  # prints the summary itself
     return 0 if health.get("server_up") else 1
 
 
+def _cmd_rollback_live(args: argparse.Namespace) -> int:
+    dry_run = bool(getattr(args, "dry_run", False))
+    deployer = Deployer(".", dry_run=dry_run)
+    if not dry_run and not ask_yes_no("⚠️  This rolls back the LIVE service on your platform. Continue?"):
+        print("Rollback cancelled.\n")
+        return 0
+
+    if not deployer.rollback_live(getattr(args, "platform", None)):
+        print("\n❌ LIVE ROLLBACK FAILED. The running service was not changed by this tool.\n")
+        return 1
+
+    if dry_run:
+        print("\n✅ DRY RUN COMPLETE. Nothing was changed.\n")
+    else:
+        print("\n✅ Rollback requested. Check the platform dashboard until the service is live.\n")
+    return 0
+
+
 def cmd_rollback(args: argparse.Namespace) -> int:
+    if getattr(args, "live", False):
+        return _cmd_rollback_live(args)
+
     deployer = Deployer(".")
     if not ask_yes_no("⚠️  Are you sure you want to rollback?"):
         print("Rollback cancelled.\n")
@@ -603,6 +624,21 @@ def main() -> int:
     health_parser.set_defaults(func=cmd_health)
 
     rollback_parser = subparsers.add_parser("rollback", help="Rollback to previous deployment")
+    rollback_parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Roll back the running service on its platform (Render only). Does not touch local files.",
+    )
+    rollback_parser.add_argument(
+        "--platform",
+        choices=["render", "railway", "vercel", "heroku"],
+        help="With --live: platform to roll back (default: the platform of the latest deployment record)",
+    )
+    rollback_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --live: show the API calls without making them",
+    )
     rollback_parser.set_defaults(func=cmd_rollback)
 
     parser.add_argument("-h", "--help", action="store_true", help="Show help message")
