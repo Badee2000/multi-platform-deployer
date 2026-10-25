@@ -587,7 +587,7 @@ deployment on your platform is not changed, so you must redeploy the restored
 code yourself. The command exits with a non-zero code if no previous snapshot
 exists or the restore fails.
 
-Live rollback was run once against a real Render service (the Flask example): Render accepted the request, chose the expected earlier deploy, and the service stayed healthy. The deploys in that test ran identical code, so it proves the API call works, not that different older code comes back. The "refuses to roll back twice" guard is covered by mocked tests only.
+Live rollback was run against a real Render service (the Flask example). Test on 2026-10-25: a deploy served `"version":"v2"`, then `rollback --live` returned it to the previous code within about 20 seconds, with a monitor recording both states. The safety guard was also exercised live: with a rollback already live, a second `rollback --live` changed nothing and exited non-zero.
 
 ### Deploy to Multiple Platforms
 Want your app on Render AND Railway for redundancy?
