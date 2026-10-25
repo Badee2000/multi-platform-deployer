@@ -1,12 +1,17 @@
 """Heroku platform deployer."""
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from .base import BaseDeployer
 from ..utils.helpers import file_exists, has_uncommitted_changes
 
 
 class HerokuDeployer(BaseDeployer):
     """Deployer for Heroku platform."""
+
+    # Git asks this helper for credentials. It reads the key from the process
+    # environment at push time, so the key never appears in the command line.
+    # The empty credential.helper before it clears any helper that could prompt.
+    _CREDENTIAL_HELPER = "!f() { echo username=heroku; echo password=$HEROKU_API_KEY; }; f"
     
     @staticmethod
     def get_platform_name() -> str:
@@ -23,7 +28,7 @@ class HerokuDeployer(BaseDeployer):
         self.logger.info("Validating Heroku deployment readiness...")
         
         checks = [
-            (self._check_procfile, "Procfile"),
+            (self._check_procfile, "Procfile (or 'start_command' in your config)"),
             (self._check_requirements, "requirements.txt"),
         ]
         
@@ -40,15 +45,21 @@ class HerokuDeployer(BaseDeployer):
     def prepare(self) -> bool:
         """
         Prepare Heroku deployment.
+
+        A Procfile is only created from your 'start_command'. No start command
+        is guessed, because a wrong guess only fails after the push.
         
         Returns:
             True if preparation successful
         """
         self.logger.info("Preparing Heroku deployment...")
         
-        # Ensure Procfile exists
-        if not file_exists(str(self.project_root / "Procfile")):
+        if not file_exists(str(self.project_root / "Procfile")) and self.config.get("start_command"):
             self._create_procfile()
+            self.logger.warning(
+                "Procfile created from 'start_command'. Heroku deploys committed code only: "
+                "commit the Procfile, then run again."
+            )
         
         return True
     
@@ -68,7 +79,7 @@ class HerokuDeployer(BaseDeployer):
         if api_key is None:
             return False
 
-        env = {"HEROKU_API_KEY": api_key}
+        env: Dict[str, Optional[str]] = {"HEROKU_API_KEY": api_key}
         if self._run_step(["heroku", "auth:whoami"], env=env, secrets=[api_key]) is None:
             self.logger.error("Heroku rejected HEROKU_API_KEY (or the CLI is missing).")
             return False
@@ -84,8 +95,13 @@ class HerokuDeployer(BaseDeployer):
             return False
 
         output = self._run_step(
-            ["git", "push", "heroku", "HEAD:main"],
-            env=env,
+            [
+                "git",
+                "-c", "credential.helper=",
+                "-c", f"credential.helper={self._CREDENTIAL_HELPER}",
+                "push", "heroku", "HEAD:main",
+            ],
+            env={"HEROKU_API_KEY": api_key, "GIT_TERMINAL_PROMPT": "0"},
             secrets=[api_key],
         )
         if output is None:
@@ -103,7 +119,7 @@ class HerokuDeployer(BaseDeployer):
             Configuration template (Procfile content)
         """
         return {
-            "procfile": "web: python app.py",
+            "procfile": f"web: {self.config.get('start_command', 'gunicorn app:app')}",
         }
 
     def rollback(self, deployment_state: Dict[str, Any]) -> bool:
@@ -115,16 +131,16 @@ class HerokuDeployer(BaseDeployer):
         return super().rollback(deployment_state)
     
     def _check_procfile(self) -> bool:
-        """Check if Procfile exists."""
-        return file_exists(str(self.project_root / "Procfile"))
+        """A Procfile, or a 'start_command' to create one from."""
+        return file_exists(str(self.project_root / "Procfile")) or bool(self.config.get("start_command"))
     
     def _check_requirements(self) -> bool:
         """Check if requirements.txt exists."""
         return file_exists(str(self.project_root / "requirements.txt"))
     
     def _create_procfile(self) -> None:
-        """Create Procfile."""
-        procfile_content = f"web: python app.py"
-        with open(self.project_root / "Procfile", "w") as f:
+        """Create a Procfile from the configured start command."""
+        procfile_content = f"web: {self.config['start_command']}\n"
+        with open(self.project_root / "Procfile", "w", encoding="utf-8") as f:
             f.write(procfile_content)
         self.logger.info("Procfile created")

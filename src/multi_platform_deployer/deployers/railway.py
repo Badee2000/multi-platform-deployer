@@ -40,14 +40,17 @@ class RailwayDeployer(BaseDeployer):
     def prepare(self) -> bool:
         """
         Prepare Railway deployment.
+
+        railway.json is only generated when 'start_command' is set in your config,
+        so the command you chose is used. Without it, a Procfile or an existing
+        railway.json decides how the app starts. Nothing is guessed.
         
         Returns:
             True if preparation successful
         """
         self.logger.info("Preparing Railway deployment...")
         
-        # Generate railway.json if not exists
-        if not file_exists(str(self.project_root / "railway.json")):
+        if not file_exists(str(self.project_root / "railway.json")) and self.config.get("start_command"):
             self.generate_config_file("railway.json")
         
         return True
@@ -56,18 +59,31 @@ class RailwayDeployer(BaseDeployer):
         """
         Deploy with the Railway CLI.
 
-        Uses RAILWAY_TOKEN (a project token) from the environment. The token
-        identifies the project, so no interactive `railway link` is needed.
-        Railway's CLI does not print a stable public URL; run `railway domain`
-        to see it.
+        Uses RAILWAY_TOKEN (a project token) from the environment. The project,
+        environment and service must already exist, because Railway never
+        creates projects in CI. Optional config keys 'railway_project',
+        'railway_environment' and 'railway_service' are passed as --project,
+        --environment and --service. Railway's CLI does not print a stable
+        public URL; run `railway domain` to see it.
         """
         token = self._require_credential("RAILWAY_TOKEN")
         if token is None:
             return False
 
+        command = ["railway", "up", "--ci"]
+        for config_key, flag in (
+            ("railway_project", "--project"),
+            ("railway_environment", "--environment"),
+            ("railway_service", "--service"),
+        ):
+            value = self.config.get(config_key)
+            if value:
+                command += [flag, str(value)]
+
+        # Railway rejects runs where both token variables are set.
         output = self._run_step(
-            ["railway", "up", "--ci"],
-            env={"RAILWAY_TOKEN": token},
+            command,
+            env={"RAILWAY_TOKEN": token, "RAILWAY_API_TOKEN": None},
             secrets=[token],
         )
         if output is None:
@@ -84,16 +100,19 @@ class RailwayDeployer(BaseDeployer):
         Returns:
             Configuration template
         """
+        deploy: Dict[str, Any] = {
+            "restartPolicyType": "ON_FAILURE",
+            "restartPolicyMaxRetries": 5,
+        }
+        start_command = self.config.get("start_command")
+        if start_command:
+            deploy["startCommand"] = str(start_command)
         return {
             "$schema": "https://railway.app/railway.schema.json",
             "build": {
                 "builder": "NIXPACKS"
             },
-            "deploy": {
-                "startCommand": "python app.py",
-                "restartPolicyType": "ON_FAILURE",
-                "restartPolicyMaxRetries": 5
-            }
+            "deploy": deploy,
         }
     
     def _check_requirements(self) -> bool:

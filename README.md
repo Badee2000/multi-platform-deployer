@@ -120,9 +120,9 @@ py deploy.py run --platform vercel --dry-run   # or render, railway, heroku
 | Platform | Install | Credential (environment variable) | What gets deployed |
 |----------|---------|-----------------------------------|--------------------|
 | Render | Nothing extra (uses the REST API) | `RENDER_API_KEY` (optional: `RENDER_OWNER_ID`) | The commit on your git remote `origin` |
-| Railway | `npm install -g @railway/cli` | `RAILWAY_TOKEN` | Your local folder (`railway up --ci`) |
+| Railway | `npm install -g @railway/cli` | `RAILWAY_TOKEN` (a project token; not `RAILWAY_API_TOKEN`) | Your local folder (`railway up --ci`); the project and service must already exist |
 | Vercel | `npm install -g vercel` | `VERCEL_TOKEN` | Your local folder (`vercel deploy --prod --yes`) |
-| Heroku | Heroku CLI, then `heroku login` | `HEROKU_API_KEY` | The commit pushed to the `heroku` git remote |
+| Heroku | Heroku CLI | `HEROKU_API_KEY` | The commit pushed to the `heroku` git remote |
 
 Set credentials as environment variables in the shell you deploy from. Never put them in `deployment.yaml` or on the command line.
 
@@ -144,16 +144,16 @@ Add `--dry-run` to any of these to preview. A real deploy exits non-zero on fail
 ### Things to know before a real deploy
 - **Git:** Render and Heroku deploy committed code. Commit and push first; the deployer refuses a dirty working tree (and, for Render, an unpushed `origin`). Heroku also needs a `heroku` remote (`heroku git:remote -a <app>`). Railway and Vercel deploy your local files.
 - **Secrets are not uploaded.** Local `.env` values are never sent to a platform. Set them in the platform dashboard (Render: Environment; Railway: Variables; Vercel: Project Settings > Environment Variables) or with `heroku config:set`.
-- **Production server:** Render has no default start command. A first deploy stops until you set `start_command` in `deployment.yaml` (for example `gunicorn wsgi:app`) and add the server to `requirements.txt`. Heroku uses your `Procfile` instead.
+- **Production server:** Render has no default start command. A first deploy stops until you set `start_command` in `deployment.yaml` (for example `gunicorn wsgi:app`) and add the server to `requirements.txt`. Heroku uses your `Procfile`, and Railway your `Procfile` or `railway.json`; neither platform gets a guessed start command.
 - **Railway URL:** `railway up` does not print a stable URL. Run `railway domain` to get it. If the CLI reports no linked project, run `railway link` once.
 - **Render service ID:** the first real deploy creates the service and prints its ID. Add `render_service_id: <id>` to `deployment.yaml` so later runs redeploy that service instead of creating a new one.
-- **Vercel config:** if `vercel.json` is missing, the deployer generates one that uses `@vercel/python` with `app.py`.
+- **Vercel config:** no `vercel.json` is generated. Vercel detects Flask, FastAPI and Django by itself (see the Vercel section for the entry points it needs).
 - **Verify:** `py deploy.py health --url https://your-app.example.com`.
 
 ### Known limitations
 - Live status: verified so far on Render with a Flask project: service creation, build, the post-deploy `health` check, a redeploy of the same service via `render_service_id`, and a live rollback (2026-10-25). Railway, Vercel and Heroku have not been run live at all. The rest is covered by mocked tests. Make your first real deploy to a throwaway app.
 - Requires Python 3.11 or newer. Python 3.8, 3.9 and 3.10 are no longer supported (all end of life, and Heroku already deprecates 3.10). Tests run in CI on Python 3.11 to 3.14, on Linux and Windows.
-- Railway and Heroku token behavior depends on each vendor's CLI. The live read-only checks (see [Testing](#testing)) confirm the credential works before you deploy.
+- Railway and Heroku token behavior depends on each vendor's CLI. Both are unverified live; see their sections for what is and is not confirmed. The live read-only checks (see [Testing](#testing)) confirm a credential works before you deploy.
 
 ## Walkthrough: Deploy a Flask App to Render
 
@@ -495,12 +495,14 @@ py deploy.py run --platform railway
 
 **What it does:**
 - Runs `railway up --ci` with the Railway CLI
-- Generates `railway.json` (Nixpacks builder) if you do not have one
-- Needs the Railway CLI on your PATH and `RAILWAY_TOKEN`
-- The deploy prints no stable public URL, so check the Railway dashboard for it
+- Needs the Railway CLI on your PATH and `RAILWAY_TOKEN`, a **project token** created in the Railway project's settings. Do not set `RAILWAY_API_TOKEN` as well: Railway rejects that, so the tool removes it for the run.
+- The project, environment and service must already exist: Railway never creates projects in CI. Optional config keys `railway_project`, `railway_environment` and `railway_service` are passed as `--project`, `--environment` and `--service`.
+- Start command: your `Procfile` or `railway.json` decides. If you set `start_command` and have no `railway.json`, one is generated from it. No start command is guessed.
+- The deploy prints no stable public URL. Run `railway domain` or check the Railway dashboard.
+- Not yet confirmed live: whether the project token alone is enough without `railway link`.
 
 ### Vercel
-Best for: Serverless Python APIs (FastAPI, Flask)
+Best for: Serverless Python APIs (FastAPI, Flask, Django)
 **Status: 🧪 experimental** (mocked tests only, never run on a real account).
 
 ```bash
@@ -509,23 +511,27 @@ py deploy.py run --platform vercel
 
 **What it does:**
 - Runs `vercel deploy --prod --yes` with the Vercel CLI
-- Generates `vercel.json` (Python builder, `app.py`) if you do not have one
-- Needs the Vercel CLI on your PATH and `VERCEL_TOKEN`
+- Needs the Vercel CLI on your PATH and `VERCEL_TOKEN`. If your project is already linked, `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` are used when set.
+- Vercel detects Flask, FastAPI and Django by itself, so **no `vercel.json` is generated**. An existing one is left alone.
+- Needs a Python entry point Vercel recognizes: `app.py`, `index.py`, `server.py`, `main.py`, `wsgi.py` or `asgi.py` (also under `src/` or `app/`), or a Django `manage.py`. The file must define `app` (Flask, FastAPI) or `application` (Django).
+- Serverless: the filesystem is read-only, so do not rely on SQLite writes.
 - Prints the production URL when the CLI reports it
 
 ### Heroku
 Best for: Apps deployed with git push
-**Status: 🧪 experimental** (mocked tests only, never run on a real account). Whether `HEROKU_API_KEY` alone authenticates the `git push` is not confirmed.
+**Status: 🧪 experimental** (mocked tests only, never run on a real account).
 
 ```bash
 py deploy.py run --platform heroku
 ```
 
 **What it does:**
-- Checks you are logged in with `heroku auth:whoami`
-- Requires a clean git working tree, a `heroku` git remote, and a `Procfile`
-- Runs `git push heroku HEAD:main`
-- Needs the Heroku CLI logged in (`heroku login`)
+- Checks the key with `heroku auth:whoami`
+- Requires a clean git working tree, a `heroku` git remote (`heroku git:remote -a <app>`, HTTPS), and a `Procfile`. If you have no Procfile but set `start_command`, one is created from it and you must commit it.
+- Runs `git push heroku HEAD:main`, authenticating with `HEROKU_API_KEY` through a one-time git credential helper that reads the key from the environment, so the key never appears in the command line and `heroku login` is not required.
+- Needs the Heroku CLI and `HEROKU_API_KEY`
+- Not yet confirmed live: the credential-helper push has only been tested with mocks.
+- Pin the Python version in `.python-version` as `3.12` (major.minor): Heroku supports only the latest patch of each version.
 
 ---
 

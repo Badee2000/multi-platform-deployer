@@ -135,6 +135,37 @@ def test_vercel_dry_run_runs_nothing(tmp_path, fake_cli, monkeypatch):
     assert fake_cli.calls == []
 
 
+@pytest.mark.parametrize(
+    "entry", ["app.py", "main.py", "wsgi.py", "asgi.py", "server.py", "index.py", "manage.py", "api/index.py", "src/main.py", "app/main.py"]
+)
+def test_vercel_accepts_every_documented_python_entrypoint(tmp_path, fake_cli, entry):
+    path = tmp_path / entry
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "requirements.txt").write_text("flask\n", encoding="utf-8")
+
+    assert VercelDeployer(str(tmp_path)).validate() is True
+
+
+def test_vercel_rejects_project_without_entrypoint(tmp_path, fake_cli):
+    (tmp_path / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    (tmp_path / "helpers.py").write_text("x = 1\n", encoding="utf-8")
+
+    assert VercelDeployer(str(tmp_path)).validate() is False
+
+
+def test_vercel_does_not_generate_legacy_config(tmp_path, fake_cli):
+    assert VercelDeployer(str(tmp_path)).prepare() is True
+    assert not (tmp_path / "vercel.json").exists()
+
+
+def test_vercel_leaves_existing_config_untouched(tmp_path, fake_cli):
+    (tmp_path / "vercel.json").write_text('{"custom": true}', encoding="utf-8")
+
+    assert VercelDeployer(str(tmp_path)).prepare() is True
+    assert (tmp_path / "vercel.json").read_text(encoding="utf-8") == '{"custom": true}'
+
+
 # --- Railway -----------------------------------------------------------------
 
 
@@ -145,6 +176,45 @@ def test_railway_deploy_success(tmp_path, fake_cli, monkeypatch):
     assert deployer.deploy() is True
     assert fake_cli.commands == ["railway up --ci"]
     assert fake_cli.calls[0]["env"]["RAILWAY_TOKEN"] == SECRET
+
+
+def test_railway_removes_account_token_so_cli_does_not_reject_the_run(tmp_path, fake_cli, monkeypatch):
+    """Railway errors when RAILWAY_TOKEN and RAILWAY_API_TOKEN are both set."""
+    monkeypatch.setenv("RAILWAY_TOKEN", SECRET)
+
+    assert RailwayDeployer(str(tmp_path)).deploy() is True
+    env = fake_cli.calls[0]["env"]
+    assert "RAILWAY_API_TOKEN" in env and env["RAILWAY_API_TOKEN"] is None
+
+
+def test_railway_passes_project_environment_and_service_flags(tmp_path, fake_cli, monkeypatch):
+    monkeypatch.setenv("RAILWAY_TOKEN", SECRET)
+    config = {"railway_project": "prj-1", "railway_environment": "production", "railway_service": "web"}
+
+    assert RailwayDeployer(str(tmp_path), config).deploy() is True
+    assert fake_cli.commands == ["railway up --ci --project prj-1 --environment production --service web"]
+    assert SECRET not in fake_cli.commands[0]
+
+
+def test_railway_does_not_generate_config_without_start_command(tmp_path, fake_cli):
+    assert RailwayDeployer(str(tmp_path)).prepare() is True
+    assert not (tmp_path / "railway.json").exists()
+
+
+def test_railway_generates_config_from_start_command_only(tmp_path, fake_cli):
+    deployer = RailwayDeployer(str(tmp_path), {"start_command": "gunicorn wsgi:app"})
+
+    assert deployer.prepare() is True
+    text = (tmp_path / "railway.json").read_text(encoding="utf-8")
+    assert "gunicorn wsgi:app" in text
+    assert "python app.py" not in text
+
+
+def test_railway_keeps_existing_config(tmp_path, fake_cli):
+    (tmp_path / "railway.json").write_text('{"custom": true}', encoding="utf-8")
+
+    assert RailwayDeployer(str(tmp_path), {"start_command": "x"}).prepare() is True
+    assert (tmp_path / "railway.json").read_text(encoding="utf-8") == '{"custom": true}'
 
 
 def test_railway_missing_token_never_runs_cli(tmp_path, fake_cli, monkeypatch):
@@ -162,7 +232,13 @@ def test_heroku_refuses_uncommitted_changes(tmp_path, fake_cli, monkeypatch):
     deployer = HerokuDeployer(str(tmp_path))
 
     assert deployer.deploy() is False
-    assert not any(c.startswith("git push") for c in fake_cli.commands)
+    assert not any(" push " in f" {c} " for c in fake_cli.commands)
+
+
+def _push_call(fake_cli):
+    pushes = [c for c in fake_cli.calls if "push" in c["argv"]]
+    assert len(pushes) == 1
+    return pushes[0]
 
 
 def test_heroku_pushes_head_to_main_when_clean(tmp_path, fake_cli, monkeypatch):
@@ -170,7 +246,39 @@ def test_heroku_pushes_head_to_main_when_clean(tmp_path, fake_cli, monkeypatch):
     deployer = HerokuDeployer(str(tmp_path))
 
     assert deployer.deploy() is True
-    assert "git push heroku HEAD:main" in fake_cli.commands
+    argv = _push_call(fake_cli)["argv"]
+    assert argv[-3:] == ["push", "heroku", "HEAD:main"]
+
+
+def test_heroku_push_authenticates_through_environment_not_argv(tmp_path, fake_cli, monkeypatch):
+    """git push must not depend on 'heroku login'; the key travels only in the environment."""
+    monkeypatch.setenv("HEROKU_API_KEY", SECRET)
+
+    assert HerokuDeployer(str(tmp_path)).deploy() is True
+    call = _push_call(fake_cli)
+    assert SECRET not in " ".join(call["argv"])
+    assert call["env"]["HEROKU_API_KEY"] == SECRET
+    assert call["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    helpers = [a for a in call["argv"] if a.startswith("credential.helper=")]
+    assert helpers[0] == "credential.helper="
+    assert "$HEROKU_API_KEY" in helpers[1]
+
+
+def test_heroku_does_not_invent_a_procfile(tmp_path, fake_cli, monkeypatch):
+    deployer = HerokuDeployer(str(tmp_path))
+
+    assert deployer.validate() is False
+    assert deployer.prepare() is True
+    assert not (tmp_path / "Procfile").exists()
+
+
+def test_heroku_creates_procfile_only_from_start_command(tmp_path, fake_cli):
+    (tmp_path / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    deployer = HerokuDeployer(str(tmp_path), {"start_command": "gunicorn wsgi:app"})
+
+    assert deployer.validate() is True
+    assert deployer.prepare() is True
+    assert (tmp_path / "Procfile").read_text(encoding="utf-8") == "web: gunicorn wsgi:app\n"
 
 
 def test_heroku_auth_failure_stops_before_push(tmp_path, fake_cli, monkeypatch):

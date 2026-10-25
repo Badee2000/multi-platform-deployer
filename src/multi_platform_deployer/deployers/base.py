@@ -103,7 +103,7 @@ class BaseDeployer(ABC):
     def _run_step(
         self,
         command: List[str],
-        env: Optional[Dict[str, str]] = None,
+        env: Optional[Dict[str, Optional[str]]] = None,
         secrets: Iterable[str] = (),
         timeout: float = DEFAULT_STEP_TIMEOUT,
     ) -> Optional[str]:

@@ -23,7 +23,7 @@ __all__ = [
 def run_command(
     command: List[str],
     cwd: Optional[str] = None,
-    env: Optional[Dict[str, str]] = None,
+    env: Optional[Dict[str, Optional[str]]] = None,
     check: bool = True,
     timeout: Optional[float] = None,
 ) -> subprocess.CompletedProcess:
@@ -33,7 +33,7 @@ def run_command(
     Args:
         command: Command and arguments as list
         cwd: Working directory for command
-        env: Environment variables
+        env: Variables added to the inherited environment; a value of None removes the variable
         check: Raise exception if command fails
         timeout: Seconds before the command is killed (None means no limit).
             Raises subprocess.TimeoutExpired when exceeded.
@@ -43,7 +43,11 @@ def run_command(
     """
     full_env = os.environ.copy()
     if env:
-        full_env.update(env)
+        for key, value in env.items():
+            if value is None:
+                full_env.pop(key, None)
+            else:
+                full_env[key] = value
     
     return subprocess.run(
         command,

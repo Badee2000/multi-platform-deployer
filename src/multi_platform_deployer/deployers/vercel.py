@@ -8,8 +8,13 @@ from ..utils.helpers import file_exists
 class VercelDeployer(BaseDeployer):
     """Deployer for Vercel platform."""
 
-    # Files Vercel's Python runtime can detect as the app entry point.
-    ENTRY_POINTS = ("app.py", "index.py", "api/index.py", "server.py")
+    # Files Vercel's Python runtime detects as the app entry point (also looked up
+    # under src/ and app/). manage.py covers Django, which Vercel resolves from
+    # WSGI_APPLICATION. api/index.py is the older layout and still works.
+    ENTRY_POINTS = (
+        "app.py", "index.py", "server.py", "main.py", "wsgi.py", "asgi.py", "manage.py", "api/index.py",
+    )
+    ENTRY_POINT_DIRS = ("", "src/", "app/")
     
     @staticmethod
     def get_platform_name() -> str:
@@ -26,7 +31,7 @@ class VercelDeployer(BaseDeployer):
         self.logger.info("Validating Vercel deployment readiness...")
         
         checks = [
-            (self._check_api_routes, "Python entry point (app.py, index.py, api/index.py or server.py)"),
+            (self._check_api_routes, "Python entry point (app.py, main.py, wsgi.py, asgi.py, manage.py, ...)"),
             (self._check_requirements, "requirements.txt"),
         ]
         
@@ -43,16 +48,14 @@ class VercelDeployer(BaseDeployer):
     def prepare(self) -> bool:
         """
         Prepare Vercel deployment.
-        
+
+        Vercel detects Flask, FastAPI and Django on its own, so no vercel.json is
+        generated. An existing one is left untouched.
+
         Returns:
             True if preparation successful
         """
-        self.logger.info("Preparing Vercel deployment...")
-        
-        # Generate vercel.json if not exists
-        if not file_exists(str(self.project_root / "vercel.json")):
-            self.generate_config_file("vercel.json")
-        
+        self.logger.info("Preparing Vercel deployment (no vercel.json needed for Flask, FastAPI or Django)...")
         return True
     
     def deploy(self) -> bool:
@@ -83,30 +86,20 @@ class VercelDeployer(BaseDeployer):
     def get_config_template(self) -> Dict[str, Any]:
         """
         Get Vercel configuration template.
-        
+
+        Vercel needs no config file for supported Python frameworks, so this is
+        deliberately empty. Add a vercel.json yourself only for custom routing.
+
         Returns:
-            Configuration template
+            An empty template
         """
-        return {
-            "version": 2,
-            "builds": [
-                {
-                    "src": "app.py",
-                    "use": "@vercel/python"
-                }
-            ],
-            "routes": [
-                {
-                    "src": "/(.*)",
-                    "dest": "app.py"
-                }
-            ]
-        }
+        return {}
     
     def _check_api_routes(self) -> bool:
         """Check that a Python entry point Vercel can detect exists."""
         return any(
-            file_exists(str(self.project_root / name))
+            file_exists(str(self.project_root / (prefix + name)))
+            for prefix in self.ENTRY_POINT_DIRS
             for name in self.ENTRY_POINTS
         )
 
