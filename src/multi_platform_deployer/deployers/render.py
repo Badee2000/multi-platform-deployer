@@ -324,8 +324,8 @@ class RenderDeployer(BaseDeployer):
         Roll the Render service back to its most recent earlier successful deploy.
 
         Uses Render's rollback API, which reuses the old build artifact, so no
-        rebuild happens. It does not disable autodeploys: a later commit pushed
-        to the linked branch will deploy again.
+        rebuild happens. Autodeploy may be switched off by Render as a result;
+        the final log lines report its real state.
         """
         api_key = self._require_credential("RENDER_API_KEY")
         if api_key is None:
@@ -367,11 +367,39 @@ class RenderDeployer(BaseDeployer):
             return False
 
         self.logger.info("Render accepted the rollback. Watch the service's Events tab until it is live.")
-        self.logger.warning(
-            "Autodeploy is still ON. A new commit on the linked branch will deploy again and may "
-            "undo this rollback. Turn it off in the Render dashboard (Settings) if needed."
-        )
+        self._report_autodeploy_state(api_key, str(service_id))
         return True
+
+    def _report_autodeploy_state(self, api_key: str, service_id: str) -> None:
+        """
+        Tell the user what Render actually did to autodeploy.
+
+        Render's API docs say a rollback leaves autodeploy alone, but a live
+        test showed it switched off, so read the real state instead of guessing.
+        """
+        service = self._api("GET", f"/services/{service_id}", api_key)
+        state = None
+        if isinstance(service, dict):
+            state = service.get("autoDeployTrigger")
+            if state is None:
+                legacy = service.get("autoDeploy")
+                state = {"yes": "commit", "no": "off"}.get(str(legacy)) if legacy else None
+
+        if state == "off":
+            self.logger.warning(
+                "Autodeploy is now OFF for this service. New commits will not deploy until you "
+                "turn it back on in the Render dashboard (Settings > Auto-Deploy)."
+            )
+        elif state:
+            self.logger.warning(
+                f"Autodeploy is still on ({state}). A new commit on the linked branch will deploy "
+                "again and may undo this rollback. Turn it off in the Render dashboard if needed."
+            )
+        else:
+            self.logger.warning(
+                "Could not read the autodeploy setting. Check Settings > Auto-Deploy in the Render "
+                "dashboard: a rollback can turn it off, and a later commit may undo the rollback if it is on."
+            )
 
     @staticmethod
     def _pick_rollback_target(items: List[Any]) -> Optional[Dict[str, Any]]:

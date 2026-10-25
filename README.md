@@ -573,7 +573,7 @@ This uses Render's rollback API to put the running service back on its most rece
 - It picks the newest earlier deploy that was live before. Failed builds are skipped.
 - If the live deploy is itself a rollback, the command stops instead of flipping back to the bad build. Choose a deploy in the Render dashboard (service > Deploys) in that case.
 - If there is no earlier successful deploy, or Render no longer keeps its build, nothing is changed and the command exits non-zero.
-- **Autodeploy stays on.** The next commit pushed to the linked branch deploys again and may undo the rollback. Turn autodeploy off in the Render dashboard (Settings) if you need the rollback to hold.
+- **Render may switch autodeploy off.** Render's API docs say a rollback leaves autodeploy alone, but in a live test it was switched off (the dashboard does this too). The tool reads the service afterwards and tells you the real state. If it is off, new commits will not deploy until you turn it back on in the Render dashboard (Settings > Auto-Deploy). If it is still on, a new commit will deploy again and may undo the rollback.
 - Other platforms print "not supported" and exit non-zero. Use their own dashboard or CLI.
 
 **File rollback (default, any platform):**

@@ -407,14 +407,16 @@ def test_render_rollback_targets_previous_successful_deploy(tmp_path, fake_cli, 
                 ],
             ),
             FakeResponse(201, {"id": "dpl-4"}),
+            FakeResponse(200, {"autoDeployTrigger": "commit"}),
         ]
     )
 
     assert _rollback_deployer(tmp_path).rollback_live() is True
-    get_call, post_call = fake_http["calls"]
+    get_call, post_call, state_call = fake_http["calls"]
     assert get_call["method"] == "GET" and "/services/srv-1/deploys" in get_call["url"]
     assert post_call["method"] == "POST" and post_call["url"].endswith("/services/srv-1/rollback")
     assert post_call["json"] == {"deployId": "dpl-2"}
+    assert state_call["method"] == "GET" and state_call["url"].endswith("/services/srv-1")
     assert not any(c["url"].endswith("/deploys") and c["method"] == "POST" for c in fake_http["calls"])
     assert fake_cli.calls == []
 
@@ -433,6 +435,7 @@ def test_render_rollback_skips_failed_builds(tmp_path, fake_cli, fake_http, monk
                 ],
             ),
             FakeResponse(201, {}),
+            FakeResponse(200, {"autoDeployTrigger": "commit"}),
         ]
     )
 
@@ -512,8 +515,7 @@ def test_render_rollback_api_error_is_reported_and_hides_key(tmp_path, fake_cli,
     assert SECRET not in caplog.text
 
 
-def test_render_rollback_warns_that_autodeploy_stays_on(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
-    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+def _autodeploy_scenario(tmp_path, fake_http, service_payload):
     fake_http["queue"].extend(
         [
             FakeResponse(
@@ -524,12 +526,52 @@ def test_render_rollback_warns_that_autodeploy_stays_on(tmp_path, fake_cli, fake
                 ],
             ),
             FakeResponse(201, {}),
+            FakeResponse(200, service_payload),
         ]
     )
+    return _rollback_deployer(tmp_path)
+
+
+def test_render_rollback_reports_autodeploy_switched_off(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
+    """A live test showed Render turns autodeploy off on rollback despite its docs."""
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    deployer = _autodeploy_scenario(tmp_path, fake_http, {"autoDeployTrigger": "off"})
 
     with caplog.at_level("WARNING"):
-        assert _rollback_deployer(tmp_path).rollback_live() is True
-    assert "Autodeploy is still ON" in caplog.text
+        assert deployer.rollback_live() is True
+    assert "Autodeploy is now OFF" in caplog.text
+
+
+def test_render_rollback_reports_autodeploy_still_on(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    deployer = _autodeploy_scenario(tmp_path, fake_http, {"autoDeployTrigger": "commit"})
+
+    with caplog.at_level("WARNING"):
+        assert deployer.rollback_live() is True
+    assert "Autodeploy is still on (commit)" in caplog.text
+
+
+@pytest.mark.parametrize("legacy, expected", [("no", "Autodeploy is now OFF"), ("yes", "Autodeploy is still on")])
+def test_render_rollback_reads_legacy_autodeploy_field(
+    tmp_path, fake_cli, fake_http, monkeypatch, caplog, legacy, expected
+):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    deployer = _autodeploy_scenario(tmp_path, fake_http, {"autoDeploy": legacy})
+
+    with caplog.at_level("WARNING"):
+        assert deployer.rollback_live() is True
+    assert expected in caplog.text
+
+
+def test_render_rollback_still_succeeds_when_autodeploy_state_is_unreadable(
+    tmp_path, fake_cli, fake_http, monkeypatch, caplog
+):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    deployer = _autodeploy_scenario(tmp_path, fake_http, {})
+
+    with caplog.at_level("WARNING"):
+        assert deployer.rollback_live() is True
+    assert "Could not read the autodeploy setting" in caplog.text
 
 
 def test_render_rollback_dry_run_makes_no_requests(tmp_path, fake_cli, fake_http, monkeypatch):
@@ -586,6 +628,7 @@ def test_deployer_rollback_live_uses_platform_from_latest_record(tmp_path, fake_
                 ],
             ),
             FakeResponse(201, {}),
+            FakeResponse(200, {"autoDeployTrigger": "commit"}),
         ]
     )
 
