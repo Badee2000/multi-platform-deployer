@@ -3,9 +3,20 @@
 [![PyPI - Version](https://img.shields.io/pypi/v/multi-platform-deployer.svg)](https://pypi.org/project/multi-platform-deployer/)
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/multi-platform-deployer.svg?label=pip%20installs)](https://pypi.org/project/multi-platform-deployer/)
 
-> **Deploy your Python apps to *any* cloud platform without the headache.**
+> **Check your Python app, then deploy it to Render, Railway, Vercel or Heroku from one tool.**
 
-Deploying to different cloud platforms usually means learning completely different tools, config formats, and workflows. That's exhausting and error-prone. This package fixes that by giving you a **single, simple interface** to deploy Flask, Django, and FastAPI applications to Render, Railway, Vercel, and Heroku.
+Deploying to different cloud platforms usually means learning completely different tools, config formats, and workflows. That's exhausting and error-prone. This package gives you a **single, simple interface** to check and deploy Flask, Django, and FastAPI applications to Render, Railway, Vercel, and Heroku.
+
+### Platform status (what has actually been tested)
+
+| Platform | Status | Evidence |
+|----------|--------|----------|
+| **Render** | ✅ Verified live | Service creation, build, health check, redeploy and live rollback were run against a real Render account with a Flask app (2026-10-25). |
+| **Railway** | 🧪 Experimental | Uses the `railway` CLI. Covered by mocked tests only; never run against a real account. |
+| **Vercel** | 🧪 Experimental | Uses the `vercel` CLI. Covered by mocked tests only; never run against a real account. |
+| **Heroku** | 🧪 Experimental | Uses `git push` to the `heroku` remote. Covered by mocked tests only; never run against a real account. |
+
+*Verified live* means it ran end to end on a real account. *Experimental* means it is implemented and tested with mocks, but not proven live. Make your first real deploy to a throwaway app. Frameworks: Flask is verified (on Render). Django and FastAPI projects pass the readiness checks and the dry run, but have not been deployed yet. Tests run in CI on Python 3.10 to 3.14, on Linux and Windows.
 
 Think of it as a universal translator for cloud deployments.
 
@@ -61,7 +72,7 @@ I automated all of that. This package:
 
 1. **Checks your app** - Validates that your app is actually ready for production (not just locally)
 2. **Picks the platform** - Works with Render, Railway, Vercel, and Heroku (and you can add more)
-3. **Handles everything** - Migrations, environment variables, config files, health checks
+3. **Handles the repetitive parts** - Optional Django/Alembic migrations, config files, health checks. (Secrets are never uploaded: set them in the platform dashboard.)
 4. **Does one deploy** - Single command to deploy to one or multiple platforms simultaneously
 
 That's it. You go from code to deployed in minutes, not hours.
@@ -459,6 +470,7 @@ All checks give you **specific, actionable feedback**. Not vague errors. Real gu
 
 ### Render
 Best for: General purpose Python web apps. Uses the Render REST API.
+**Status: ✅ verified live** (create, build, health, redeploy, live rollback with a Flask app).
 
 ```bash
 py deploy.py run --platform render
@@ -475,6 +487,7 @@ py deploy.py run --platform render
 
 ### Railway
 Best for: Apps that need the Railway runtime
+**Status: 🧪 experimental** (mocked tests only, never run on a real account).
 
 ```bash
 py deploy.py run --platform railway
@@ -488,6 +501,7 @@ py deploy.py run --platform railway
 
 ### Vercel
 Best for: Serverless Python APIs (FastAPI, Flask)
+**Status: 🧪 experimental** (mocked tests only, never run on a real account).
 
 ```bash
 py deploy.py run --platform vercel
@@ -501,6 +515,7 @@ py deploy.py run --platform vercel
 
 ### Heroku
 Best for: Apps deployed with git push
+**Status: 🧪 experimental** (mocked tests only, never run on a real account). Whether `HEROKU_API_KEY` alone authenticates the `git push` is not confirmed.
 
 ```bash
 py deploy.py run --platform heroku
