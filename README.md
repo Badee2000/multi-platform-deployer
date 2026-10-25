@@ -1,4 +1,4 @@
-# Multi-Platform Deployer 🚀
+# Multi-Platform Deployer
 
 [![PyPI - Version](https://img.shields.io/pypi/v/multi-platform-deployer.svg)](https://pypi.org/project/multi-platform-deployer/)
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/multi-platform-deployer.svg?label=pip%20installs)](https://pypi.org/project/multi-platform-deployer/)
