@@ -16,7 +16,7 @@ Deploying to different cloud platforms usually means learning completely differe
 | **Vercel** | 🧪 Experimental | Uses the `vercel` CLI. Covered by mocked tests only; never run against a real account. |
 | **Heroku** | 🧪 Experimental | Uses `git push` to the `heroku` remote. Covered by mocked tests only; never run against a real account. |
 
-*Verified live* means it ran end to end on a real account. *Experimental* means it is implemented and tested with mocks, but not proven live. Make your first real deploy to a throwaway app. Frameworks: Flask is verified (on Render). Django and FastAPI projects pass the readiness checks and the dry run, but have not been deployed yet. Tests run in CI on Python 3.10 to 3.14, on Linux and Windows.
+*Verified live* means it ran end to end on a real account. *Experimental* means it is implemented and tested with mocks, but not proven live. Make your first real deploy to a throwaway app. Frameworks: Flask is verified (on Render). Django and FastAPI projects pass the readiness checks and the dry run, but have not been deployed yet. Tests run in CI on Python 3.11 to 3.14, on Linux and Windows.
 
 Think of it as a universal translator for cloud deployments.
 
@@ -152,14 +152,14 @@ Add `--dry-run` to any of these to preview. A real deploy exits non-zero on fail
 
 ### Known limitations
 - Live status: verified so far on Render with a Flask project: service creation, build, the post-deploy `health` check, a redeploy of the same service via `render_service_id`, and a live rollback (2026-10-25). Railway, Vercel and Heroku have not been run live at all. The rest is covered by mocked tests. Make your first real deploy to a throwaway app.
-- Requires Python 3.10 or newer. Python 3.8 and 3.9 are no longer supported (both are end of life, and the code was never tested on them). Tests run in CI on Python 3.10 to 3.14, on Linux and Windows.
+- Requires Python 3.11 or newer. Python 3.8, 3.9 and 3.10 are no longer supported (all end of life, and Heroku already deprecates 3.10). Tests run in CI on Python 3.11 to 3.14, on Linux and Windows.
 - Railway and Heroku token behavior depends on each vendor's CLI. The live read-only checks (see [Testing](#testing)) confirm the credential works before you deploy.
 
 ## Walkthrough: Deploy a Flask App to Render
 
 This is the exact flow used to create a Render service from a small Flask project. Run it on a throwaway app first. Commands are PowerShell; on macOS or Linux use `export NAME=value` instead of `$env:NAME = "value"`.
 
-**What you need:** Python 3.10+, `git`, a GitHub account, a Render account, and `pip install multi-platform-deployer` (or the source install above).
+**What you need:** Python 3.11+, `git`, a GitHub account, a Render account, and `pip install multi-platform-deployer` (or the source install above).
 
 ### 1. Prepare the app
 - `requirements.txt` lists a production server, for example `Flask==3.1.3` and `gunicorn==26.2.0`.
