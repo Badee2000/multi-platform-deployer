@@ -35,3 +35,4 @@ artifacts/
 *.key
 copilot-instructions.md
 docs
+local_examples/

@@ -1,65 +1,64 @@
-# Workflow temporarily disabled to stop failing checks.
-# name: Tests
-#
-# on:
-#   push:
-#     branches: [ main, develop ]
-#   pull_request:
-#     branches: [ main, develop ]
-#
-# jobs:
-#   test:
-#     runs-on: ubuntu-latest
-#     strategy:
-#       matrix:
-#         python-version: ['3.8', '3.9', '3.10', '3.11']
-#
-#     steps:
-#     - uses: actions/checkout@v3
-#     
-#     - name: Set up Python ${{ matrix.python-version }}
-#       uses: actions/setup-python@v4
-#       with:
-#         python-version: ${{ matrix.python-version }}
-#     
-#     - name: Cache dependencies
-#       uses: actions/cache@v3
-#       with:
-#         path: ~/.cache/pip
-#         key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-#         restore-keys: |
-#           ${{ runner.os }}-pip-
-#     
-#     - name: Install dependencies
-#       run: |
-#         python -m pip install --upgrade pip
-#         pip install -e ".[dev]"
-#     
-#     - name: Lint with flake8
-#       run: |
-#         flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
-#         flake8 src/ tests/ --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
-#     
-#     - name: Type check with mypy
-#       run: |
-#         mypy src/ --ignore-missing-imports || true
-#     
-#     - name: Format check with black
-#       run: |
-#         black --check src/ tests/ || true
-#     
-#     - name: Sort imports with isort
-#       run: |
-#         isort --check-only src/ tests/ || true
-#     
-#     - name: Run tests with pytest
-#       run: |
-#         pytest tests/ -v --cov=src --cov-report=xml --cov-report=term-missing
-#     
-#     - name: Upload coverage reports to Codecov
-#       uses: codecov/codecov-action@v3
-#       with:
-#         files: ./coverage.xml
-#         flags: unittests
-#         name: codecov-umbrella
-#         fail_ci_if_error: false
+name: Tests
+
+# Tests only. Nothing here deploys, and no repository secrets are used.
+# Live platform tests stay skipped because MPD_LIVE_TESTS is never set.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package with dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Lint (syntax errors and undefined names)
+        run: flake8 src tests --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Type check
+        run: mypy src
+
+      - name: Run tests
+        run: pytest tests -q
+
+  build:
+    name: Build and check package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          twine check dist/*
