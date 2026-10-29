@@ -9,7 +9,7 @@ include = ["multi_platform_deployer*"]
 [project]
 name = "multi-platform-deployer"
 version = "0.2.0"
-description = "A unified Python package for deploying to multiple platforms"
+description = "Check Flask, Django and FastAPI apps and deploy them to Render and Vercel (Railway and Heroku are experimental)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -48,9 +48,9 @@ dev = [
 multi-platform-deployer = "multi_platform_deployer.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/multi-platform-deployer"
-Repository = "https://github.com/yourusername/multi-platform-deployer"
-Issues = "https://github.com/yourusername/multi-platform-deployer/issues"
+Homepage = "https://github.com/Badee2000/multi-platform-deployer"
+Repository = "https://github.com/Badee2000/multi-platform-deployer"
+Issues = "https://github.com/Badee2000/multi-platform-deployer/issues"
 
 [tool.black]
 line-length = 88
