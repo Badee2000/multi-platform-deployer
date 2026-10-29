@@ -115,6 +115,20 @@ class TestConfigValidator:
         
         assert is_valid is False
     
+    @pytest.mark.parametrize("platform", ["aws", "gcp", ""])
+    def test_platforms_without_a_deployer_are_rejected(self, platform):
+        """Only platforms that have a deployer are valid."""
+        is_valid, errors = ConfigValidator.validate({"platform": platform, "app_name": "test-app"})
+
+        assert is_valid is False
+        assert any("Invalid platform" in e for e in errors)
+
+    @pytest.mark.parametrize("platform", ["render", "railway", "vercel", "heroku", "Render"])
+    def test_every_supported_platform_is_valid(self, platform):
+        is_valid, errors = ConfigValidator.validate({"platform": platform, "app_name": "test-app"})
+
+        assert is_valid is True, errors
+    
     def test_multiple_platforms(self):
         """Test validation with multiple platforms."""
         config = {

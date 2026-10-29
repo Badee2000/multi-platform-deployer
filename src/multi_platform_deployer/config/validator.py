@@ -8,7 +8,7 @@ class ConfigValidator:
     """Validate deployment configurations."""
     
     REQUIRED_KEYS = ["platform", "app_name"]
-    VALID_PLATFORMS = ["render", "railway", "vercel", "heroku", "aws"]
+    VALID_PLATFORMS = ["render", "railway", "vercel", "heroku"]
     
     @staticmethod
     def validate(config: Dict[str, Any]) -> Tuple[bool, List[str]]:

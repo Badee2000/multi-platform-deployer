@@ -341,6 +341,28 @@ def _write_env_values(env_vars: dict, env_path: Path) -> Tuple[List[str], List[s
     return written, skipped
 
 
+def _ensure_env_is_gitignored(project_dir: Path) -> bool:
+    """Make sure .env is listed in .gitignore so secrets are not committed by accident.
+
+    Returns True if the entry was added, False if it was already covered.
+    """
+    gitignore = project_dir / ".gitignore"
+    covered = {".env", "/.env", ".env*", "*.env"}
+    if gitignore.exists():
+        entries = {line.strip() for line in gitignore.read_text(encoding="utf-8").splitlines()}
+        if entries & covered:
+            return False
+        needs_newline = gitignore.stat().st_size > 0 and not gitignore.read_bytes().endswith(b"\n")
+    else:
+        needs_newline = False
+
+    with open(gitignore, "a", encoding="utf-8") as f:
+        if needs_newline:
+            f.write("\n")
+        f.write(".env\n")
+    return True
+
+
 def setup_wizard() -> None:
     """Interactive wizard to create deployment.yaml file."""
 
@@ -383,6 +405,14 @@ def setup_wizard() -> None:
         "app_name": app_name,
     }
 
+    # The start command is optional here, but Render needs one for the first deploy
+    # and no single default fits Flask, Django and FastAPI.
+    start_command = input(
+        "\nProduction start command, e.g. 'gunicorn wsgi:app' (Enter to skip): "
+    ).strip()
+    if start_command:
+        config_data["start_command"] = start_command
+
     if ask_yes_no("\nAdd environment variables?"):
         env_vars = {}
         print("\n(Enter each as KEY=VALUE, blank line to finish)")
@@ -401,19 +431,10 @@ def setup_wizard() -> None:
                 print(f"\n🔐 Saved to .env: {', '.join(written)}")
             if skipped:
                 print(f"⚠️  Already in .env, left unchanged: {', '.join(skipped)}")
-            print("   Values are stored only in .env (git-ignored), not in the deployment config.")
-
-    # Ask for services (Railway-specific)
-    if platform == "railway" and ask_yes_no("\nAdd services configuration?"):
-        print("\n(Service configuration is optional for Railway)")
-        config_data["services"] = [
-            {
-                "name": "web",
-                "buildCommand": "pip install -r requirements.txt",
-                "startCommand": "gunicorn config.wsgi",
-                "port": 8000,
-            }
-        ]
+            if _ensure_env_is_gitignored(cwd):
+                print("   Added .env to .gitignore so it is not committed.")
+            print("   Values are stored only in .env, not in the deployment config.")
+            print("   They are not uploaded to the platform. Set them in its dashboard.")
 
     # Write configuration
     use_json = ask_yes_no("\nUse JSON format (vs YAML)?")
