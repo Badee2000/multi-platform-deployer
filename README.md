@@ -13,6 +13,19 @@ It does three things:
 
 It does not provision databases, and it does not upload secrets. You set those in each platform's dashboard.
 
+## What you can do with it
+
+| Task | Command | Status |
+|------|---------|--------|
+| Check a Python web app before deploying it | `multi-platform-deployer check` | Works for Flask, Django and FastAPI |
+| Deploy a Flask app to Render | `multi-platform-deployer run --platform render` | Verified live |
+| Deploy a Django or FastAPI app to Render | `multi-platform-deployer run --platform render` | Not yet verified live |
+| Deploy a Flask, Django or FastAPI app to Vercel | `multi-platform-deployer run --platform vercel` | Not yet verified live |
+| Deploy a Python app to Railway or Heroku | `multi-platform-deployer run --platform railway` or `--platform heroku` | Experimental |
+| Preview a deployment without changing anything | add `--dry-run` | Works on all platforms |
+| Check that a deployed app is up | `multi-platform-deployer health --url <url>` | Works on any URL |
+| Roll back a Render deployment from the command line | `multi-platform-deployer rollback --live` | Verified live |
+
 ## Status
 
 Only what has been run against a real account is listed as verified. Everything else is implemented and covered by mocked tests, but has not been run live.
