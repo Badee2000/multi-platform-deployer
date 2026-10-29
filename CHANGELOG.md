@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 - 2026-10-29
+
+Package metadata and documentation only. No code changes since 0.3.0.
+
+- The PyPI page now shows the real author, Flask, Django and FastAPI classifiers, a Developer audience tag, an Alpha status, more keywords, and Documentation and Changelog links.
+- The package description no longer says Vercel deploys are supported. Only Render has been verified live.
+- The README has a table of common tasks with the true status of each.
+
 ## 0.3.0 - 2026-10-29
 
 Only Render has been run against a real account, and only with a Flask app. Vercel, Railway and Heroku changes in this release are covered by mocked tests, not live runs. Railway and Heroku remain experimental.
