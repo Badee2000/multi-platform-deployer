@@ -9,21 +9,33 @@ include = ["multi_platform_deployer*"]
 [project]
 name = "multi-platform-deployer"
 version = "0.3.0"
-description = "Check Flask, Django and FastAPI apps and deploy them to Render and Vercel (Railway and Heroku are experimental)"
+description = "Pre-deploy checks and one-command deploys for Flask, Django and FastAPI apps. Render verified; Vercel, Railway and Heroku experimental."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [
-    {name = "Multi-Platform Deployer Team"}
+    {name = "Badee Esmandar"}
 ]
-keywords = ["deployment", "render", "railway", "vercel", "heroku"]
+keywords = [
+    "deployment", "deploy", "cli", "devops", "flask", "django", "fastapi",
+    "render", "vercel", "railway", "heroku", "health-check", "rollback",
+]
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Framework :: Django",
+    "Framework :: FastAPI",
+    "Framework :: Flask",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
-    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Software Distribution",
 ]
 
 dependencies = [
@@ -48,7 +60,9 @@ multi-platform-deployer = "multi_platform_deployer.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Badee2000/multi-platform-deployer"
+Documentation = "https://github.com/Badee2000/multi-platform-deployer#readme"
 Repository = "https://github.com/Badee2000/multi-platform-deployer"
+Changelog = "https://github.com/Badee2000/multi-platform-deployer/blob/main/CHANGELOG.md"
 Issues = "https://github.com/Badee2000/multi-platform-deployer/issues"
 
 [tool.black]
