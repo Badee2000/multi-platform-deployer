@@ -8,7 +8,7 @@ include = ["multi_platform_deployer*"]
 
 [project]
 name = "multi-platform-deployer"
-version = "0.2.0"
+version = "0.3.0"
 description = "Check Flask, Django and FastAPI apps and deploy them to Render and Vercel (Railway and Heroku are experimental)"
 readme = "README.md"
 requires-python = ">=3.11"
