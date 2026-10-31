@@ -2,6 +2,7 @@
 
 [![PyPI - Version](https://img.shields.io/pypi/v/multi-platform-deployer.svg)](https://pypi.org/project/multi-platform-deployer/)
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/multi-platform-deployer.svg?label=pip%20installs)](https://pypi.org/project/multi-platform-deployer/)
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/Badee2000/badge.svg)](https://hub.xerj.org/contributors/Badee2000)
 
 A command-line tool that checks a Flask, Django or FastAPI project for deployment problems and then deploys it to Render, Vercel, Railway or Heroku with one command.
 
@@ -427,3 +428,7 @@ Issues and pull requests are welcome. Run `pytest` and `mypy src` before opening
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Listed in the XERJ Corpus Hub
+
+This repository is included in the [XERJ Corpus Hub](https://hub.xerj.org/contributors/Badee2000), an open index of code that AI coding agents search for worked examples. The selected commit is [`b078c24`](https://github.com/Badee2000/multi-platform-deployer/commit/b078c24faeb872ef4774d061cd046fb8b312e1b5), which fixes the Vercel, Railway and Heroku deployers against their official docs. It is indexed under this repository's MIT license, with attribution. XERJ is a separate project and is not affiliated with this one.
