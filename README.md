@@ -21,7 +21,7 @@ It does not provision databases, and it does not upload secrets. You set those i
 | Check a Python web app before deploying it | `multi-platform-deployer check` | Works for Flask, Django and FastAPI |
 | Deploy a Flask app to Render | `multi-platform-deployer run --platform render` | Verified live |
 | Deploy a Django app to Render | `multi-platform-deployer run --platform render` | Verified live |
-| Deploy a FastAPI app to Render | `multi-platform-deployer run --platform render` | Not yet verified live |
+| Deploy a FastAPI app to Render | `multi-platform-deployer run --platform render` | Verified live |
 | Deploy a Flask, Django or FastAPI app to Vercel | `multi-platform-deployer run --platform vercel` | Not yet verified live |
 | Deploy a Python app to Railway or Heroku | `multi-platform-deployer run --platform railway` or `--platform heroku` | Experimental |
 | Preview a deployment without changing anything | add `--dry-run` | Works on all platforms |
@@ -34,7 +34,7 @@ Only what has been run against a real account is listed as verified. Everything 
 
 | Platform | Status | What has been run live |
 |----------|--------|------------------------|
-| Render | Verified | Flask: create service, build, health check, redeploy, live rollback. Django: create service, build, health check with the tool's `health` command, redeploy (including waiting until live), live rollback. FastAPI: not yet. |
+| Render | Verified | Flask: create service, build, health check, redeploy, live rollback. Django: create service, build, health check with the tool's `health` command, redeploy (including waiting until live), live rollback. FastAPI: create service, build (the tool waited until live), health check with the tool's `health` command, redeploy, live rollback. |
 | Vercel | Not verified | Nothing yet. |
 | Railway | Experimental | Nothing. Not tested yet. |
 | Heroku | Experimental | Nothing. Not tested yet. |
@@ -145,7 +145,7 @@ An environment variable exists only in the terminal where you set it. A new term
 
 ### Render
 
-Status: verified with Flask and Django. Not yet verified with FastAPI. For Django, the first deploy and a redeploy from the command line were run live (the redeploy served the new code; auto-deploy was also on at the time). Django rollback was also run live. It moved the service from version 3 back to version 2, and Render switched auto-deploy off, as in the Flask tests.
+Status: verified with Flask, Django and FastAPI. For FastAPI, the first deploy, a redeploy and a live rollback were run (the rollback moved the service from version 3 back to version 2). For Django, the first deploy and a redeploy from the command line were run live (the redeploy served the new code; auto-deploy was also on at the time). Django rollback was also run live. It moved the service from version 3 back to version 2, and Render switched auto-deploy off, as in the Flask tests.
 
 ```bash
 multi-platform-deployer run --platform render
@@ -165,7 +165,7 @@ multi-platform-deployer run --platform render
   Add the server (`gunicorn` or `uvicorn`) to `requirements.txt`.
 - The first run prints the service ID. Add it to `deployment.yaml` as `render_service_id`, commit, and push. Later runs then redeploy that service instead of creating another.
 - Because the service is created with auto-deploy on, every push to the linked branch already deploys on Render. Running `run` on an existing service then starts a second deploy of the same commit. The tool does not change this Render setting. It is still useful for the first deploy, the readiness checks, health checks and live rollback.
-- `run` waits for the deploy to go live and prints each status change. It exits non-zero if the build fails, the deploy is canceled or replaced, the status cannot be read, or `render_wait_timeout` (default 900 seconds) passes. In the last two cases the deploy may still finish on Render. The tool never retries a deploy. Verified live with a Django app on a redeploy: it waited about a minute and reported success only after the deploy was live; a deliberately broken build ended with `build_failed` and exit code 1, and the live app kept serving the old code; a 5 second timeout ended with exit code 1 while the deploy kept running on Render. Waiting after the first deploy (service creation), canceled or replaced deploys, and an unreadable status are covered by mocked tests only.
+- `run` waits for the deploy to go live and prints each status change. It exits non-zero if the build fails, the deploy is canceled or replaced, the status cannot be read, or `render_wait_timeout` (default 900 seconds) passes. In the last two cases the deploy may still finish on Render. The tool never retries a deploy. Verified live with a Django app on a redeploy: it waited about a minute and reported success only after the deploy was live; a deliberately broken build ended with `build_failed` and exit code 1, and the live app kept serving the old code; a 5 second timeout ended with exit code 1 while the deploy kept running on Render. Waiting after the first deploy (service creation) was also run live, with a FastAPI app: it waited about a minute and reported success after the deploy was live. Canceled or replaced deploys and an unreadable status are covered by mocked tests only.
 
 ### Vercel
 
@@ -305,7 +305,7 @@ multi-platform-deployer rollback --live              # asks for confirmation fir
 - If the live deploy is itself a rollback, the command stops instead of switching back to the bad build. Pick a deploy in the dashboard (service, Deploys) instead.
 - If there is no earlier successful deploy, or Render no longer keeps its build, nothing changes and the command exits non-zero.
 - **Render may turn auto-deploy off.** Render's API documentation says a rollback leaves it alone, but in all four live tests it was switched off. After a rollback the tool reads the service and prints the real state. If it is off, new commits do not deploy until you turn it back on under Settings, Auto-Deploy. If it is still on, the next commit deploys again and can undo the rollback.
-- Verified live with Flask: a deploy serving `"version":"v2"` was rolled back to the previous code in about 20 seconds. Verified live with Django: a deploy serving `"version": 3` was rolled back to version 2.
+- Verified live with Flask: a deploy serving `"version":"v2"` was rolled back to the previous code in about 20 seconds. Verified live with Django: a deploy serving `"version": 3` was rolled back to version 2. Verified live with FastAPI: the same, from version 3 back to version 2.
 
 **File rollback (any platform):**
 
@@ -358,7 +358,7 @@ deployer.check_health("https://my-app.onrender.com", endpoints=["/", "/health"])
 
 ## Limitations
 
-- Only Render has been run live, with Flask and Django apps. Vercel, Railway and Heroku are implemented and mock-tested only.
+- Only Render has been run live, with Flask, Django and FastAPI apps. Vercel, Railway and Heroku are implemented and mock-tested only.
 - Live rollback exists for Render only.
 - Secrets and environment variables are not uploaded. Set them in each platform's dashboard.
 - The tool does not create databases.
@@ -374,7 +374,7 @@ Small apps used to test the tool. Each has a `Procfile`, pinned requirements, a 
 |-----------|------------|----------|
 | Flask | [mpd-flask-example](https://github.com/Badee2000/mpd-flask-example) | Render |
 | Django | [mpd-django-example](https://github.com/Badee2000/mpd-django-example) | Render |
-| FastAPI | [mpd-fastapi-example](https://github.com/Badee2000/mpd-fastapi-example) | Not yet |
+| FastAPI | [mpd-fastapi-example](https://github.com/Badee2000/mpd-fastapi-example) | Render |
 
 The `examples/` folder in this repository holds minimal starter files. They have not been deployed.
 
