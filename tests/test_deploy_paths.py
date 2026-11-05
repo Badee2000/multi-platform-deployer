@@ -1,6 +1,7 @@
 """Mocked tests for the real deploy paths. No platform CLI or API is ever called."""
 
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -371,6 +372,23 @@ def test_render_creates_service_and_reports_url(tmp_path, fake_cli, fake_http, m
     assert call["json"]["serviceDetails"]["envSpecificDetails"]["startCommand"] == "gunicorn app:app"
 
 
+def test_render_sends_django_start_command_unchanged(tmp_path, fake_cli, fake_http, monkeypatch):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    monkeypatch.setenv("RENDER_OWNER_ID", "own-1")
+    _render_git_responses(fake_cli)
+    fake_http["queue"].append(
+        FakeResponse(201, {"service": {"id": "srv-2", "serviceDetails": {"url": "https://shop.onrender.com"}}})
+    )
+    start_command = "gunicorn shop.wsgi:application"
+    deployer = RenderDeployer(str(tmp_path), {"app_name": "shop", "start_command": start_command})
+
+    assert deployer.deploy() is True
+    assert deployer.deployed_url == "https://shop.onrender.com"
+    payload = fake_http["calls"][0]["json"]
+    assert payload["serviceDetails"]["envSpecificDetails"]["startCommand"] == start_command
+    assert payload["serviceDetails"]["runtime"] == "python"
+
+
 def test_render_refuses_to_create_without_start_command(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
     monkeypatch.setenv("RENDER_API_KEY", SECRET)
     monkeypatch.setenv("RENDER_OWNER_ID", "own-1")
@@ -454,6 +472,158 @@ def test_render_redeploys_configured_service(tmp_path, fake_cli, fake_http, monk
     assert deployer.deployed_url == "https://app.onrender.com"
 
 
+@pytest.fixture
+def fake_clock(monkeypatch):
+    """Replace the deployer's clock so waiting for a deploy costs no real time."""
+    clock = {"now": 0.0, "sleeps": []}
+
+    def sleep(seconds):
+        clock["sleeps"].append(seconds)
+        clock["now"] += seconds
+
+    monkeypatch.setattr(render_module, "time", SimpleNamespace(monotonic=lambda: clock["now"], sleep=sleep))
+    return clock
+
+
+def _redeploy_queue(fake_http, *statuses):
+    fake_http["queue"].extend([FakeResponse(201, {"id": "dep-1"}), FakeResponse(200, {})])
+    fake_http["queue"].extend(FakeResponse(200, {"id": "dep-1", "status": s}) for s in statuses)
+
+
+def test_render_redeploy_waits_until_live(tmp_path, fake_cli, fake_http, fake_clock, monkeypatch):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    _render_git_responses(fake_cli)
+    _redeploy_queue(fake_http, "created", "build_in_progress", "live")
+
+    assert RenderDeployer(str(tmp_path), {"render_service_id": "srv-9"}).deploy() is True
+    polls = [c for c in fake_http["calls"] if c["url"].endswith("/services/srv-9/deploys/dep-1")]
+    assert len(polls) == 3 and all(c["method"] == "GET" for c in polls)
+    assert fake_clock["sleeps"] == [render_module.POLL_INTERVAL] * 2
+
+
+def test_render_redeploy_fails_when_the_build_fails(tmp_path, fake_cli, fake_http, fake_clock, monkeypatch, caplog):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    _render_git_responses(fake_cli)
+    _redeploy_queue(fake_http, "build_in_progress", "build_failed")
+
+    with caplog.at_level("ERROR"):
+        assert RenderDeployer(str(tmp_path), {"render_service_id": "srv-9"}).deploy() is False
+    assert "build failed" in caplog.text
+
+
+def test_render_redeploy_times_out_without_retrying(tmp_path, fake_cli, fake_http, fake_clock, monkeypatch, caplog):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    _render_git_responses(fake_cli)
+    _redeploy_queue(fake_http, *["build_in_progress"] * 10)
+    deployer = RenderDeployer(str(tmp_path), {"render_service_id": "srv-9", "render_wait_timeout": 25})
+
+    with caplog.at_level("ERROR"):
+        assert deployer.deploy() is False
+    assert "after 25 seconds" in caplog.text
+    deploy_posts = [c for c in fake_http["calls"] if c["method"] == "POST"]
+    assert len(deploy_posts) == 1
+    assert sum(fake_clock["sleeps"]) <= 25
+
+
+def test_render_wait_timeout_zero_does_not_poll(tmp_path, fake_cli, fake_http, fake_clock, monkeypatch):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    _render_git_responses(fake_cli)
+    _redeploy_queue(fake_http)
+    deployer = RenderDeployer(str(tmp_path), {"render_service_id": "srv-9", "render_wait_timeout": 0})
+
+    assert deployer.deploy() is True
+    assert [c["method"] for c in fake_http["calls"]] == ["POST", "GET"]
+    assert fake_clock["sleeps"] == []
+
+
+@pytest.mark.parametrize("value", ["soon", -5, 1.5, True])
+def test_render_rejects_invalid_wait_timeout_before_any_call(
+    tmp_path, fake_cli, fake_http, monkeypatch, caplog, value
+):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    _render_git_responses(fake_cli)
+
+    with caplog.at_level("ERROR"):
+        deployer = RenderDeployer(str(tmp_path), {"render_service_id": "srv-9", "render_wait_timeout": value})
+        assert deployer.deploy() is False
+    assert fake_http["calls"] == []
+    assert "render_wait_timeout" in caplog.text
+
+
+def test_render_wait_reports_unreadable_status_and_hides_key(
+    tmp_path, fake_cli, fake_http, fake_clock, monkeypatch, caplog
+):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    _render_git_responses(fake_cli)
+    fake_http["queue"].extend(
+        [FakeResponse(201, {"id": "dep-1"}), FakeResponse(200, {}), FakeResponse(500, text=f"oops {SECRET}")]
+    )
+
+    with caplog.at_level("ERROR"):
+        assert RenderDeployer(str(tmp_path), {"render_service_id": "srv-9"}).deploy() is False
+    assert "Could not read the status of deploy dep-1" in caplog.text
+    assert SECRET not in caplog.text
+    assert len([c for c in fake_http["calls"] if c["method"] == "POST"]) == 1
+
+
+def test_render_interrupted_wait_stops_cleanly(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    _render_git_responses(fake_cli)
+    _redeploy_queue(fake_http, "build_in_progress")
+
+    def interrupt(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(render_module, "time", SimpleNamespace(monotonic=lambda: 0.0, sleep=interrupt))
+    with caplog.at_level("ERROR"):
+        assert RenderDeployer(str(tmp_path), {"render_service_id": "srv-9"}).deploy() is False
+    assert "continues on Render" in caplog.text
+
+
+def test_render_create_waits_for_the_first_deploy(tmp_path, fake_cli, fake_http, fake_clock, monkeypatch):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    monkeypatch.setenv("RENDER_OWNER_ID", "own-1")
+    _render_git_responses(fake_cli)
+    fake_http["queue"].extend(
+        [
+            FakeResponse(
+                201,
+                {"service": {"id": "srv-5", "serviceDetails": {"url": "https://a.onrender.com"}}, "deployId": "dep-7"},
+            ),
+            FakeResponse(200, {"id": "dep-7", "status": "build_in_progress"}),
+            FakeResponse(200, {"id": "dep-7", "status": "live"}),
+        ]
+    )
+    deployer = RenderDeployer(str(tmp_path), {"start_command": "gunicorn app:app"})
+
+    assert deployer.deploy() is True
+    assert fake_http["calls"][1]["url"].endswith("/services/srv-5/deploys/dep-7")
+    assert deployer.deployed_url == "https://a.onrender.com"
+
+
+def test_render_create_fails_when_the_first_build_fails(tmp_path, fake_cli, fake_http, fake_clock, monkeypatch):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    monkeypatch.setenv("RENDER_OWNER_ID", "own-1")
+    _render_git_responses(fake_cli)
+    fake_http["queue"].extend(
+        [
+            FakeResponse(201, {"service": {"id": "srv-5", "serviceDetails": {}}, "deployId": "dep-7"}),
+            FakeResponse(200, {"id": "dep-7", "status": "build_failed"}),
+        ]
+    )
+
+    assert RenderDeployer(str(tmp_path), {"start_command": "gunicorn app:app"}).deploy() is False
+
+
+def test_render_dry_run_does_not_wait(tmp_path, fake_cli, fake_http, fake_clock, monkeypatch):
+    monkeypatch.delenv("RENDER_API_KEY", raising=False)
+    deployer = RenderDeployer(str(tmp_path), {"render_service_id": "srv-9"}, dry_run=True)
+
+    assert deployer.deploy() is True
+    assert fake_http["calls"] == []
+    assert fake_clock["sleeps"] == []
+
+
 def test_render_api_error_hides_key(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
     monkeypatch.setenv("RENDER_API_KEY", SECRET)
     monkeypatch.setenv("RENDER_OWNER_ID", "own-1")
@@ -485,14 +655,14 @@ def test_render_dry_run_makes_no_requests(tmp_path, fake_cli, fake_http, monkeyp
 # --- Render live rollback (REST API) ------------------------------------------
 
 
-def _deploy(deploy_id, status, created, trigger="new_commit", message="change"):
+def _deploy(deploy_id, status, created, trigger="new_commit", message="change", commit_id="abc"):
     return {
         "deploy": {
             "id": deploy_id,
             "status": status,
             "createdAt": created,
             "trigger": trigger,
-            "commit": {"id": "abc", "message": message},
+            "commit": {"id": commit_id, "message": message},
         },
         "cursor": deploy_id,
     }
@@ -527,6 +697,49 @@ def test_render_rollback_targets_previous_successful_deploy(tmp_path, fake_cli, 
     assert state_call["method"] == "GET" and state_call["url"].endswith("/services/srv-1")
     assert not any(c["url"].endswith("/deploys") and c["method"] == "POST" for c in fake_http["calls"])
     assert fake_cli.calls == []
+
+
+def test_render_rollback_warns_when_target_has_same_commit_as_live(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    fake_http["queue"].extend(
+        [
+            FakeResponse(
+                200,
+                [
+                    _deploy("dpl-2", "live", "2026-01-02T00:00:00Z", commit_id="same"),
+                    _deploy("dpl-1", "deactivated", "2026-01-01T00:00:00Z", commit_id="same"),
+                ],
+            ),
+            FakeResponse(201, {}),
+            FakeResponse(200, {"autoDeployTrigger": "commit"}),
+        ]
+    )
+
+    with caplog.at_level("WARNING"):
+        assert _rollback_deployer(tmp_path).rollback_live() is True
+    assert "same commit as the live one" in caplog.text
+    assert fake_http["calls"][1]["json"] == {"deployId": "dpl-1"}
+
+
+def test_render_rollback_does_not_warn_for_a_different_commit(tmp_path, fake_cli, fake_http, monkeypatch, caplog):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    fake_http["queue"].extend(
+        [
+            FakeResponse(
+                200,
+                [
+                    _deploy("dpl-2", "live", "2026-01-02T00:00:00Z", commit_id="new"),
+                    _deploy("dpl-1", "deactivated", "2026-01-01T00:00:00Z", commit_id="old"),
+                ],
+            ),
+            FakeResponse(201, {}),
+            FakeResponse(200, {"autoDeployTrigger": "commit"}),
+        ]
+    )
+
+    with caplog.at_level("WARNING"):
+        assert _rollback_deployer(tmp_path).rollback_live() is True
+    assert "same commit as the live one" not in caplog.text
 
 
 def test_render_rollback_skips_failed_builds(tmp_path, fake_cli, fake_http, monkeypatch):

@@ -2,6 +2,7 @@
 
 import os
 import re
+import time
 from typing import Dict, Any, List, Optional
 
 import requests
@@ -11,6 +12,15 @@ from ..utils.helpers import file_exists, has_uncommitted_changes
 
 RENDER_API_BASE = "https://api.render.com/v1"
 REQUEST_TIMEOUT = 30  # seconds per API call
+DEFAULT_WAIT_TIMEOUT = 900  # seconds to wait for a deploy to go live
+POLL_INTERVAL = 10  # seconds between status checks
+FAILED_DEPLOY_STATUSES = {
+    "build_failed": "the build failed",
+    "update_failed": "the deploy failed to start",
+    "pre_deploy_failed": "the pre-deploy command failed",
+    "canceled": "the deploy was canceled",
+    "deactivated": "the deploy was replaced by a newer one",
+}
 DEV_SERVER_PATTERN = re.compile(r"^\s*python3?\s+\S+\.py\b|\bflask\s+run\b|\brunserver\b")
 
 
@@ -76,10 +86,67 @@ class RenderDeployer(BaseDeployer):
         if not self._git_ready_for_render():
             return False
 
+        wait_timeout = self._wait_timeout()
+        if wait_timeout is None:
+            return False
+
         service_id = self.config.get("render_service_id")
         if service_id:
-            return self._trigger_deploy(api_key, str(service_id))
-        return self._create_service(api_key)
+            return self._trigger_deploy(api_key, str(service_id), wait_timeout)
+        return self._create_service(api_key, wait_timeout)
+
+    def _wait_timeout(self) -> Optional[int]:
+        """Seconds to wait for a deploy to go live (0 = don't wait), or None if the config is invalid."""
+        value = self.config.get("render_wait_timeout", DEFAULT_WAIT_TIMEOUT)
+        if isinstance(value, bool) or not str(value).strip().isdigit():
+            self.logger.error("'render_wait_timeout' must be a whole number of seconds (0 to skip waiting).")
+            return None
+        return int(str(value).strip())
+
+    def _wait_for_deploy(self, api_key: str, service_id: str, deploy_id: Optional[str], timeout: int) -> bool:
+        """
+        Poll a deploy until it is live. Never retries the deploy itself.
+
+        Returns False when the build fails, Render stops tracking it, the
+        timeout passes, or the status cannot be read. The deploy may still be
+        running on Render in the last two cases.
+        """
+        if self.dry_run or not deploy_id:
+            return True
+        if timeout == 0:
+            self.logger.info("Not waiting for the build (render_wait_timeout is 0). Check the Render dashboard.")
+            return True
+
+        deadline = time.monotonic() + timeout
+        last_status = None
+        try:
+            while True:
+                data = self._api("GET", f"/services/{service_id}/deploys/{deploy_id}", api_key)
+                if not isinstance(data, dict):
+                    self.logger.error(
+                        f"Could not read the status of deploy {deploy_id}. It may still be running; "
+                        "check the Render dashboard."
+                    )
+                    return False
+                status = str(data.get("status", "unknown"))
+                if status != last_status:
+                    self.logger.info(f"Deploy {deploy_id}: {status}")
+                    last_status = status
+                if status == "live":
+                    return True
+                if status in FAILED_DEPLOY_STATUSES:
+                    self.logger.error(f"Deploy {deploy_id} did not go live: {FAILED_DEPLOY_STATUSES[status]}.")
+                    return False
+                if time.monotonic() + POLL_INTERVAL > deadline:
+                    self.logger.error(
+                        f"Deploy {deploy_id} was still '{status}' after {timeout} seconds. "
+                        "It may still finish; check the Render dashboard."
+                    )
+                    return False
+                time.sleep(POLL_INTERVAL)
+        except KeyboardInterrupt:
+            self.logger.error(f"Stopped waiting. Deploy {deploy_id} continues on Render.")
+            return False
 
     def _git_ready_for_render(self) -> bool:
         """Render builds from the git remote, so local-only changes would not ship."""
@@ -129,7 +196,7 @@ class RenderDeployer(BaseDeployer):
             )
         return command
 
-    def _create_service(self, api_key: str) -> bool:
+    def _create_service(self, api_key: str, wait_timeout: int = DEFAULT_WAIT_TIMEOUT) -> bool:
         """Create a new Render web service from the current git branch."""
         start_command = self._resolve_start_command()
         if start_command is None:
@@ -181,17 +248,18 @@ class RenderDeployer(BaseDeployer):
             f"Add 'render_service_id: {new_id}' to your deployment config so future "
             "deploys update this service instead of creating a new one."
         )
-        return True
+        return self._wait_for_deploy(api_key, str(new_id), data.get("deployId"), wait_timeout)
 
-    def _trigger_deploy(self, api_key: str, service_id: str) -> bool:
+    def _trigger_deploy(self, api_key: str, service_id: str, wait_timeout: int = DEFAULT_WAIT_TIMEOUT) -> bool:
         """Start a new deploy of an existing Render service."""
-        if self._api("POST", f"/services/{service_id}/deploys", api_key, {}) is None:
+        deploy = self._api("POST", f"/services/{service_id}/deploys", api_key, {})
+        if deploy is None:
             return False
 
         service = self._api("GET", f"/services/{service_id}", api_key) or {}
         self.deployed_url = (service.get("serviceDetails") or {}).get("url")
         self.logger.info(f"Triggered a Render deploy for service {service_id}.")
-        return True
+        return self._wait_for_deploy(api_key, service_id, deploy.get("id"), wait_timeout)
 
     def _resolve_owner_id(self, api_key: str) -> Optional[str]:
         """Use RENDER_OWNER_ID if set, otherwise the only owner on the account."""
@@ -363,6 +431,11 @@ class RenderDeployer(BaseDeployer):
             f"Rolling back to deploy {target['id']} "
             f"(created {target.get('createdAt', 'unknown')}, commit: {message[0][:60] if message else 'n/a'})."
         )
+        if self._same_commit_as_live(items, target):
+            self.logger.warning(
+                "The deploy you are rolling back to has the same commit as the live one, so the running "
+                "code will not change. Render may still switch auto-deploy off."
+            )
         if self._api("POST", f"/services/{service_id}/rollback", api_key, {"deployId": target["id"]}) is None:
             return False
 
@@ -400,6 +473,15 @@ class RenderDeployer(BaseDeployer):
                 "Could not read the autodeploy setting. Check Settings > Auto-Deploy in the Render "
                 "dashboard: a rollback can turn it off, and a later commit may undo the rollback if it is on."
             )
+
+    @staticmethod
+    def _same_commit_as_live(items: Any, target: Dict[str, Any]) -> bool:
+        """True when the rollback target was built from the same commit as the live deploy."""
+        deploys = [(item.get("deploy") or item) for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+        live = next((d for d in deploys if isinstance(d, dict) and d.get("status") == "live"), None)
+        live_commit = ((live or {}).get("commit") or {}).get("id")
+        target_commit = (target.get("commit") or {}).get("id")
+        return bool(live_commit) and live_commit == target_commit
 
     @staticmethod
     def _pick_rollback_target(items: List[Any]) -> Optional[Dict[str, Any]]:

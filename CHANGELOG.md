@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 - 2026-11-05
+
+- Render: `run` now waits for the deploy to go live instead of reporting success as soon as Render accepts the request. It prints each status change and exits non-zero if the build fails, the deploy is canceled or replaced, the status cannot be read, or the wait times out. The new `render_wait_timeout` setting (seconds, default 900, `0` to skip waiting) controls the wait. The tool never retries a deploy. Run live with a Django app: a redeploy waited until the deploy was live, a deliberately broken build ended with exit code 1 while the live app kept the old code, and a 5 second timeout ended with exit code 1 while the deploy kept running on Render. Waiting after the first deploy, canceled or replaced deploys, and an unreadable status are covered by mocked tests only.
+- Render: `rollback --live` warns when the deploy it rolls back to was built from the same commit as the live one.
+- Render is now verified live with Django as well as Flask. With a Django app, the first deploy, a check with the tool's `health` command, a redeploy from the command line and `rollback --live` were run against a real account. Render turned auto-deploy off after the rollback, as it did in the Flask tests.
+- New mocked tests: a Django start command reaches the Render API unchanged, waiting for a deploy, and the same-commit rollback warning. New Django readiness test for a project that reads its settings from the environment.
+- The README says that Render deploys on every push by default, so `run` on an existing service starts a second deploy of the same commit. It also explains that `health --url` takes the base URL.
+- FastAPI on Render, and Vercel, Railway and Heroku, are still not verified live.
+
 ## 0.3.1 - 2026-10-29
 
 Package metadata and documentation only. No code changes since 0.3.0.

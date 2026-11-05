@@ -110,6 +110,29 @@ CSRF_COOKIE_SECURE = True
         
         assert result.passed is True
 
+    def test_environment_driven_settings_pass_all_checks(self, tmp_path):
+        """A production-style project reading its secrets from the environment is ready."""
+        (tmp_path / "manage.py").write_text("#!/usr/bin/env python")
+        (tmp_path / "requirements.txt").write_text("Django==5.2\ngunicorn==23.0.0\n")
+        (tmp_path / ".env.example").write_text("SECRET_KEY=change-me\nALLOWED_HOSTS=\n")
+        config = tmp_path / "config"
+        config.mkdir()
+        (config / "settings.py").write_text(
+            'import os\n'
+            'SECRET_KEY = os.environ.get("SECRET_KEY")\n'
+            'DEBUG = os.environ.get("DJANGO_DEBUG") == "1"\n'
+            'ALLOWED_HOSTS = [h for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h]\n'
+            'DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": "db.sqlite3"}}\n'
+            'STATIC_ROOT = "staticfiles"\n'
+            'SECURE_SSL_REDIRECT = not DEBUG\n'
+            'SESSION_COOKIE_SECURE = not DEBUG\n'
+            'CSRF_COOKIE_SECURE = not DEBUG\n'
+        )
+
+        is_ready, results = DjangoChecker(str(tmp_path)).check_all()
+
+        assert is_ready is True, [r for r in results if not r.passed]
+
 
 class TestFastAPIChecker:
     """Test FastAPIChecker class."""
