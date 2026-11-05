@@ -1,8 +1,10 @@
 """Tests for the main Deployer class."""
 
-import pytest
 import tempfile
 from pathlib import Path
+
+import pytest
+
 from multi_platform_deployer.main import Deployer
 
 

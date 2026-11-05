@@ -35,12 +35,14 @@ def test_run_all_checks_does_not_mark_database_as_passed(checker, monkeypatch):
 def test_print_summary_shows_database_as_not_checked(checker, capsys):
     checker.print_summary({"server_up": True, "database": None})
     output = capsys.readouterr().out
-    assert "NOT CHECKED: Database" in output
-    assert "PASS: Database" not in output
+    assert "[not checked] Database" in output
+    assert "[ok  ] Database" not in output
 
 
 def test_server_up_true_on_200(checker, monkeypatch):
-    monkeypatch.setattr(urllib_request(), "urlopen", lambda url, timeout: _Response(200))
+    monkeypatch.setattr(
+        urllib_request(), "urlopen", lambda url, timeout: _Response(200)
+    )
     assert checker.check_server_up(max_retries=3) is True
 
 
@@ -106,7 +108,9 @@ def test_endpoint_http_error_keeps_status_code(checker, monkeypatch):
 
 
 def test_endpoint_success_reports_ok(checker, monkeypatch):
-    monkeypatch.setattr(urllib_request(), "urlopen", lambda url, timeout: _Response(200))
+    monkeypatch.setattr(
+        urllib_request(), "urlopen", lambda url, timeout: _Response(200)
+    )
     result = checker.check_endpoints(["/"])["/"]
     assert result == {"status": 200, "ok": True}
 

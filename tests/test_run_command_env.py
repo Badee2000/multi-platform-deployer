@@ -10,7 +10,9 @@ def _capture_env(monkeypatch):
 
     def fake_run(command, cwd=None, env=None, **kwargs):
         captured["env"] = env
-        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
 
     monkeypatch.setattr(helpers.subprocess, "run", fake_run)
     return captured

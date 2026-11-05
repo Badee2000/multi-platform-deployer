@@ -77,7 +77,11 @@ class SystemChecker(BaseChecker):
 
         if pyproject_file.exists():
             content = pyproject_file.read_text(encoding="utf-8")
-            if "requires-python" in content or "python =" in content or "python=" in content:
+            if (
+                "requires-python" in content
+                or "python =" in content
+                or "python=" in content
+            ):
                 return CheckResult(
                     name="Python runtime",
                     passed=True,
@@ -183,7 +187,10 @@ class SystemChecker(BaseChecker):
         return CheckResult(
             name="Deployment config",
             passed=True,
-            message="No deployment config found; Render, Railway and Vercel generate one at deploy time",
+            message=(
+                "No deployment config found; Render, Railway and Vercel "
+                "generate one at deploy time"
+            ),
             category="system",
             severity="high",
         )
@@ -218,7 +225,7 @@ class SystemChecker(BaseChecker):
             if not stripped or stripped.startswith("#") or "=" not in stripped:
                 continue
             _, value = stripped.split("=", 1)
-            lowered = value.strip().strip('"\'').lower()
+            lowered = value.strip().strip("\"'").lower()
             if any(token in lowered for token in self._ENV_PLACEHOLDER_TOKENS):
                 placeholders.append(stripped)
 
@@ -290,7 +297,9 @@ class SystemChecker(BaseChecker):
         return CheckResult(
             name="Git workspace",
             passed=is_clean,
-            message="Working tree clean" if is_clean else "Uncommitted changes detected",
+            message=(
+                "Working tree clean" if is_clean else "Uncommitted changes detected"
+            ),
             category="system",
             severity="medium",
         )

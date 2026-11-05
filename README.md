@@ -34,7 +34,7 @@ Only what has been run against a real account is listed as verified. Everything 
 
 | Platform | Status | What has been run live |
 |----------|--------|------------------------|
-| Render | Verified | Flask: create service, build, health check, redeploy, live rollback. Django: create service, build, health check with the tool's `health` command, redeploy (including waiting until live), live rollback. FastAPI: create service, build (the tool waited until live), health check with the tool's `health` command, redeploy, live rollback. |
+| Render | Verified | Flask, Django and FastAPI: first deploy, health check, redeploy and live rollback. |
 | Vercel | Not verified | Nothing yet. |
 | Railway | Experimental | Nothing. Not tested yet. |
 | Heroku | Experimental | Nothing. Not tested yet. |
@@ -82,6 +82,22 @@ multi-platform-deployer health --url https://your-app.onrender.com
 
 A real deploy needs a credential for the platform, set as an environment variable in the same terminal. See [Platforms](#platforms).
 
+The output is plain text. `check` lists every result, and `run` prints one line per step:
+
+```
+$ multi-platform-deployer check
+
+Readiness check
+---------------
+Detected framework: django
+
+  [ok  ] Python runtime: .python-version -> 3.12.10
+  [ok  ] Dependency pinning: 2/2 dependencies pinned
+  [FAIL] Secret key: SECRET_KEY configuration not found
+
+1 check(s) failed. Fix them before deploying.
+```
+
 ## Commands
 
 | Command | What it does |
@@ -125,7 +141,7 @@ start_command: gunicorn wsgi:app
 | `render_service_id` | Render | Set after the first deploy so later runs update the same service. |
 | `render_plan` | Render | Instance plan. Default `free`. |
 | `render_region` | Render | Default `oregon`. |
-| `render_wait_timeout` | Render | Seconds `run` waits for the deploy to go live. Default `900`. `0` means do not wait. Run live with a Django app: a successful redeploy, a failed build and a timeout. The other cases are covered by mocked tests only. |
+| `render_wait_timeout` | Render | Seconds `run` waits for the deploy to go live. Default `900`. `0` means do not wait. |
 | `railway_project`, `railway_environment`, `railway_service` | Railway | Passed to `railway up` as `--project`, `--environment` and `--service`. |
 
 Keys that are not listed here are ignored.
@@ -145,7 +161,7 @@ An environment variable exists only in the terminal where you set it. A new term
 
 ### Render
 
-Status: verified with Flask, Django and FastAPI. For FastAPI, the first deploy, a redeploy and a live rollback were run (the rollback moved the service from version 3 back to version 2). For Django, the first deploy and a redeploy from the command line were run live (the redeploy served the new code; auto-deploy was also on at the time). Django rollback was also run live. It moved the service from version 3 back to version 2, and Render switched auto-deploy off, as in the Flask tests.
+Status: verified live with Flask, Django and FastAPI (see [Status](#status)).
 
 ```bash
 multi-platform-deployer run --platform render
@@ -165,7 +181,9 @@ multi-platform-deployer run --platform render
   Add the server (`gunicorn` or `uvicorn`) to `requirements.txt`.
 - The first run prints the service ID. Add it to `deployment.yaml` as `render_service_id`, commit, and push. Later runs then redeploy that service instead of creating another.
 - Because the service is created with auto-deploy on, every push to the linked branch already deploys on Render. Running `run` on an existing service then starts a second deploy of the same commit. The tool does not change this Render setting. It is still useful for the first deploy, the readiness checks, health checks and live rollback.
-- `run` waits for the deploy to go live and prints each status change. It exits non-zero if the build fails, the deploy is canceled or replaced, the status cannot be read, or `render_wait_timeout` (default 900 seconds) passes. In the last two cases the deploy may still finish on Render. The tool never retries a deploy. Verified live with a Django app on a redeploy: it waited about a minute and reported success only after the deploy was live; a deliberately broken build ended with `build_failed` and exit code 1, and the live app kept serving the old code; a 5 second timeout ended with exit code 1 while the deploy kept running on Render. Waiting after the first deploy (service creation) was also run live, with a FastAPI app: it waited about a minute and reported success after the deploy was live. Canceled or replaced deploys and an unreadable status are covered by mocked tests only.
+- `run` waits for the deploy to go live and prints each status change. It exits non-zero if the build fails, the deploy is canceled or replaced, the status cannot be read, or `render_wait_timeout` passes. After an unreadable status or a timeout the deploy may still finish on Render. The tool never retries a deploy.
+
+  Run live: a redeploy that waited until live, a deliberately broken build (`build_failed`, exit code 1, the live app kept the old code), a 5 second timeout (exit code 1, the deploy kept running on Render), and the wait after the first deploy. Canceled or replaced deploys and an unreadable status are covered by mocked tests only.
 
 ### Vercel
 
@@ -240,9 +258,12 @@ This is the flow that was run live. Use a throwaway app. Commands are PowerShell
    ```powershell
    multi-platform-deployer run --platform render
    ```
-   The output includes the service ID and URL:
+   The output includes the service ID, the build status and the URL:
    ```
    Created Render service srv-xxxxxxxxxxxxxxxxxxxx.
+   Deploy dep-xxxxxxxxxxxxxxxxxxxx: build_in_progress
+   Deploy dep-xxxxxxxxxxxxxxxxxxxx: live
+   Deployed to render.
    URL: https://my-flask-app.onrender.com
    ```
 7. **Set secrets in Render.** Open the service, go to Environment, and add `SECRET_KEY` and anything else the app reads. Saving redeploys. Until then, an app that requires `SECRET_KEY` builds but fails on start.
@@ -285,7 +306,7 @@ multi-platform-deployer health --url https://my-app.example.com --endpoints "/,/
 - `--url` is the base URL of the app. The endpoints are appended to it, so use `--url https://my-app.example.com --endpoints /health/`, not the full health URL.
 - Each endpoint is requested, and its real status code is reported, including 404 and 500.
 - The command tries up to 10 times with a capped backoff, so a server that is down takes a few minutes to report. It exits non-zero if the server is down.
-- Database connectivity is not checked. It is reported as `NOT CHECKED`.
+- Database connectivity is not checked. It is reported as `not checked`.
 
 A response below 500 includes 401 and 403. If a platform puts the app behind a login page, the check still reports the server as up. Request an endpoint that returns the status you expect.
 
@@ -388,7 +409,7 @@ The `examples/` folder in this repository holds minimal starter files. They have
 
 **The Render service was created but the app does not start.** Open the service's Logs. A missing environment variable is the usual cause. Add it under Environment. Saving redeploys.
 
-**`Could not auto-detect framework`.** Detection looks for `manage.py` or imports in `app.py`, `main.py` and `wsgi.py`. The command asks you to choose when it fails.
+**`Could not detect the framework`.** Detection looks for `manage.py` or imports in `app.py`, `main.py` and `wsgi.py`. The command asks you to choose when it fails.
 
 **Health check says the server is down.** Check that the deploy has finished, that the app listens on the port the platform provides (`$PORT`), and that the app does not start a dev server from an `if __name__ == "__main__":` block.
 
@@ -401,10 +422,13 @@ The `examples/` folder in this repository holds minimal starter files. They have
 ```bash
 pip install -e ".[dev]"
 pytest
+black --check src tests
+isort --check-only src tests
+flake8 src tests
 mypy src
 ```
 
-The suite runs 200 tests with mocks and temporary directories. It never deploys anything. Five tests are skipped unless you opt in to live credential checks, which are read-only (who am I, list owners):
+The suite has more than 200 tests, all with mocks and temporary directories. It never deploys anything. Five tests are skipped unless you opt in to live credential checks, which are read-only (who am I, list owners):
 
 ```bash
 MPD_LIVE_TESTS=1 RENDER_API_KEY=... pytest tests/test_live_deploy.py -v
@@ -429,7 +453,7 @@ examples/              minimal starter files
 
 ## Contributing
 
-Issues and pull requests are welcome. Run `pytest` and `mypy src` before opening a pull request. Do not run real deployments from tests: use mocks and temporary directories.
+Issues and pull requests are welcome. Run `pytest`, `black`, `isort`, `flake8` and `mypy src` before opening a pull request. Do not run real deployments from tests: use mocks and temporary directories.
 
 ## License
 

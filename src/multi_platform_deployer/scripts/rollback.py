@@ -23,8 +23,10 @@ class RollbackManager:
         self.project_root = Path(project_root)
         self.logger = get_logger("RollbackManager")
         self.deployment_history: List[dict] = []
-    
-    def create_checkpoint(self, platform: str, metadata: Optional[dict] = None) -> Optional[dict]:
+
+    def create_checkpoint(
+        self, platform: str, metadata: Optional[dict] = None
+    ) -> Optional[dict]:
         """Create a rollback checkpoint for a deployment."""
         deployment_id = self._generate_deployment_id(platform)
         now = datetime.now(timezone.utc)
@@ -65,7 +67,7 @@ class RollbackManager:
         except Exception as e:
             self.logger.error(f"Error saving deployment state: {e}")
             return False
-    
+
     def _load_deployment_records(self) -> List[dict]:
         """Return readable deployment records, newest first."""
         deployment_dir = self.project_root / ".deployment"
@@ -75,7 +77,9 @@ class RollbackManager:
                 with open(path, "r", encoding="utf-8") as f:
                     records.append(json.load(f))
             except (OSError, json.JSONDecodeError) as exc:
-                self.logger.warning(f"Skipping unreadable deployment record {path.name}: {exc}")
+                self.logger.warning(
+                    f"Skipping unreadable deployment record {path.name}: {exc}"
+                )
         records.sort(key=lambda record: str(record.get("timestamp", "")), reverse=True)
         return records
 
@@ -98,7 +102,7 @@ class RollbackManager:
             self.logger.warning("No previous deployment to roll back to")
             return None
         return records[1]
-    
+
     def rollback_to_previous(
         self,
         deploy_callback: Optional[Callable[[dict], bool]] = None,
@@ -126,19 +130,19 @@ class RollbackManager:
         except Exception as e:
             self.logger.error(f"Rollback failed: {e}")
             return False
-    
+
     def clean_old_deployments(self, keep_count: int = 5) -> None:
         """
         Clean up old deployment records.
-        
+
         Args:
             keep_count: Number of recent deployments to keep
         """
         deployment_dir = self.project_root / ".deployment"
-        
+
         if not deployment_dir.exists():
             return
-        
+
         try:
             files = sorted(
                 deployment_dir.glob("*.json"),
@@ -206,7 +210,9 @@ class RollbackManager:
                         continue
 
                     for file_name in files:
-                        if file_name.endswith((".pyc", ".pyo")) or self._is_secret_file(file_name):
+                        if file_name.endswith((".pyc", ".pyo")) or self._is_secret_file(
+                            file_name
+                        ):
                             continue
                         source_path = Path(root) / file_name
                         relative_path = source_path.relative_to(self.project_root)

@@ -21,7 +21,9 @@ class _FakeDeployer:
 class _FakeHealthChecker:
     @staticmethod
     def print_summary(health):
-        raise AssertionError("cmd_health must not print the summary again; check_health already does")
+        raise AssertionError(
+            "cmd_health must not print the summary again; check_health already does"
+        )
 
 
 class _FakeHealthDeployer:
@@ -36,7 +38,9 @@ class _FakeHealthDeployer:
 
 def test_cmd_run_returns_1_when_deploy_fails(monkeypatch):
     monkeypatch.setattr(cli, "deploy", lambda **kwargs: False)
-    args = argparse.Namespace(multi=False, platform="render", dry_run=False, migrate=False)
+    args = argparse.Namespace(
+        multi=False, platform="render", dry_run=False, migrate=False
+    )
     assert cli.cmd_run(args) == 1
 
 
@@ -55,7 +59,7 @@ def test_cmd_rollback_reports_live_deployment_unchanged(monkeypatch, capsys):
     monkeypatch.setattr(cli, "ask_yes_no", lambda question: True)
     monkeypatch.setattr(cli, "Deployer", lambda root: _FakeDeployer(root, result=True))
     assert cli.cmd_rollback(argparse.Namespace()) == 0
-    assert "NOT changed" in capsys.readouterr().out
+    assert "live deployment was not changed" in capsys.readouterr().out
 
 
 def test_cmd_health_returns_1_when_server_down(monkeypatch):
@@ -106,7 +110,7 @@ def test_cmd_rollback_live_failure_returns_1(monkeypatch, capsys):
     monkeypatch.setattr(cli, "Deployer", failing)
 
     assert cli.cmd_rollback(_live_args()) == 1
-    assert "LIVE ROLLBACK FAILED" in capsys.readouterr().out
+    assert "Live rollback failed" in capsys.readouterr().out
 
 
 def test_cmd_rollback_live_declined_does_nothing(monkeypatch):

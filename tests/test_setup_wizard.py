@@ -84,7 +84,9 @@ def test_wizard_without_env_vars_writes_no_env_file(tmp_path, monkeypatch):
     assert not (tmp_path / ".gitignore").exists()
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not enforced on Windows")
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX file modes are not enforced on Windows"
+)
 def test_new_env_file_is_owner_only(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _script_input(monkeypatch, ["1", "demo-app", "", "yes", "TOKEN=x", "", "no"])
@@ -131,26 +133,38 @@ def test_wizard_adds_env_to_gitignore_when_it_saves_secrets(tmp_path, monkeypatc
 
     cli.setup_wizard()
 
-    assert (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines() == [".env"]
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines() == [
+        ".env"
+    ]
 
 
-def test_wizard_appends_to_existing_gitignore_without_duplicating(tmp_path, monkeypatch):
+def test_wizard_appends_to_existing_gitignore_without_duplicating(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / ".gitignore").write_text("__pycache__/", encoding="utf-8")  # no trailing newline
+    (tmp_path / ".gitignore").write_text(
+        "__pycache__/", encoding="utf-8"
+    )  # no trailing newline
     _script_input(monkeypatch, ["1", "demo-app", "", "yes", "A=1", "", "no"])
 
     cli.setup_wizard()
     lines = (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert lines == ["__pycache__/", ".env"]
 
-    _script_input(monkeypatch, ["1", "demo-app", "", "yes", "B=2", "", "yes"])  # overwrite=yes
+    _script_input(
+        monkeypatch, ["1", "demo-app", "", "yes", "B=2", "", "yes"]
+    )  # overwrite=yes
     (tmp_path / "deployment.yaml").unlink()
     cli.setup_wizard()
-    assert (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines().count(".env") == 1
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines().count(
+        ".env"
+    ) == 1
 
 
 @pytest.mark.parametrize("existing", [".env", "/.env", ".env*", "*.env"])
-def test_wizard_leaves_gitignore_alone_when_env_is_already_covered(tmp_path, monkeypatch, existing):
+def test_wizard_leaves_gitignore_alone_when_env_is_already_covered(
+    tmp_path, monkeypatch, existing
+):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".gitignore").write_text(f"{existing}\n", encoding="utf-8")
     _script_input(monkeypatch, ["1", "demo-app", "", "yes", "A=1", "", "no"])

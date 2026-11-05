@@ -2,13 +2,31 @@
 
 ## 0.4.0 - 2026-11-05
 
-- Render: `run` now waits for the deploy to go live instead of reporting success as soon as Render accepts the request. It prints each status change and exits non-zero if the build fails, the deploy is canceled or replaced, the status cannot be read, or the wait times out. The new `render_wait_timeout` setting (seconds, default 900, `0` to skip waiting) controls the wait. The tool never retries a deploy. Run live with a Django app: a redeploy waited until the deploy was live, a deliberately broken build ended with exit code 1 while the live app kept the old code, and a 5 second timeout ended with exit code 1 while the deploy kept running on Render. Waiting after the first deploy was also run live, with a FastAPI app. Canceled or replaced deploys and an unreadable status are covered by mocked tests only.
+### Changed
+
+- The terminal output is plain text. The banner, emoji and rule lines are gone, and so is the `py deploy.py` shim from the help text. Readiness results are one line each (`[ok  ]` or `[FAIL]`). Console log lines are just the message, with `Warning:` or `Error:` in front of problems. A log file, if you configure one, still records the time, level and logger name. Scripts that parse the old text will need updating.
+- `check` no longer prints every framework result twice. The framework checkers no longer print anything themselves, so use the results they return, or `BaseChecker.print_results()`. `CheckResult.icon()` is replaced by `CheckResult.status()`.
+- `run` prints only the failed checks, or a one-line summary when they all pass.
+- A dry run no longer says "Triggered a Render deploy".
+- Render: the "Environment variables" check, which always passed and checked nothing, is gone.
+- The platform deployers share one validation loop (`BaseDeployer._run_checks`).
+- Docstrings are shorter and describe what the code does. The code is formatted with black and isort, and `flake8` and `mypy` pass (a `.flake8` file sets the line length to 100).
+
+### Added
+
+- Render: `run` now waits for the deploy to go live instead of reporting success as soon as Render accepts the request. It prints each status change and exits non-zero if the build fails, the deploy is canceled or replaced, the status cannot be read, or the wait times out. The new `render_wait_timeout` setting (seconds, default 900, `0` to skip waiting) controls the wait. The tool never retries a deploy.
 - Render: `rollback --live` warns when the deploy it rolls back to was built from the same commit as the live one.
-- Render is now verified live with Django as well as Flask. With a Django app, the first deploy, a check with the tool's `health` command, a redeploy from the command line and `rollback --live` were run against a real account. Render turned auto-deploy off after the rollback, as it did in the Flask tests.
-- New mocked tests: a Django start command reaches the Render API unchanged, waiting for a deploy, and the same-commit rollback warning. New Django readiness test for a project that reads its settings from the environment.
-- The README says that Render deploys on every push by default, so `run` on an existing service starts a second deploy of the same commit. It also explains that `health --url` takes the base URL.
-- FastAPI on Render: the first deploy (create service, wait until live), a check with the tool's `health` command, a redeploy and a live rollback were run against a real account. Render is now verified live with Flask, Django and FastAPI.
+- New tests for the waiting, the rollback warning, the terminal output and the shared validation loop, plus a Django start-command test and a Django readiness test for settings read from the environment.
+
+### Verified live
+
+- Render with Flask, Django and FastAPI: first deploy, health check, redeploy and `rollback --live`. Render turned auto-deploy off after every rollback.
+- The wait: a redeploy that waited until live, a deliberately broken build (exit code 1, the live app kept the old code), a 5 second timeout (exit code 1, the deploy kept running on Render), and the wait after the first deploy. Canceled or replaced deploys and an unreadable status are covered by mocked tests only.
 - Vercel, Railway and Heroku are still not verified live.
+
+### Documentation
+
+- The README says that Render deploys on every push by default, so `run` on an existing service starts a second deploy of the same commit. It explains that `health --url` takes the base URL, and shows the new output.
 
 ## 0.3.1 - 2026-10-29
 

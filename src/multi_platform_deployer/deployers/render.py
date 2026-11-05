@@ -3,12 +3,12 @@
 import os
 import re
 import time
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
-from .base import BaseDeployer
 from ..utils.helpers import file_exists, has_uncommitted_changes
+from .base import BaseDeployer
 
 RENDER_API_BASE = "https://api.render.com/v1"
 REQUEST_TIMEOUT = 30  # seconds per API call
@@ -21,56 +21,40 @@ FAILED_DEPLOY_STATUSES = {
     "canceled": "the deploy was canceled",
     "deactivated": "the deploy was replaced by a newer one",
 }
-DEV_SERVER_PATTERN = re.compile(r"^\s*python3?\s+\S+\.py\b|\bflask\s+run\b|\brunserver\b")
+DEV_SERVER_PATTERN = re.compile(
+    r"^\s*python3?\s+\S+\.py\b|\bflask\s+run\b|\brunserver\b"
+)
 
 
 class RenderDeployer(BaseDeployer):
     """Deployer for Render.com platform."""
-    
+
     @staticmethod
     def get_platform_name() -> str:
         """Get platform name."""
         return "Render"
-    
+
     def validate(self) -> bool:
-        """
-        Validate Render deployment readiness.
-        
-        Returns:
-            True if ready to deploy
-        """
-        self.logger.info("Validating Render deployment readiness...")
-        
-        checks = [
-            (self._check_requirements, "requirements.txt"),
-            (self._check_environment_vars, "Environment variables"),
-        ]
-        
-        all_valid = True
-        for check_func, description in checks:
-            if not check_func():
-                self.logger.warning(f"❌ {description} check failed")
-                all_valid = False
-            else:
-                self.logger.info(f"✓ {description} check passed")
-        
-        return all_valid
-    
+        """Check that the project has what Render's Python build needs."""
+        self.logger.info("Validating Render deployment readiness")
+
+        return self._run_checks([(self._check_requirements, "requirements.txt")])
+
     def prepare(self) -> bool:
         """
         Prepare Render deployment.
-        
+
         Returns:
             True if preparation successful
         """
         self.logger.info("Preparing Render deployment...")
-        
+
         # Generate render.yaml if not exists
         if not file_exists(str(self.project_root / "render.yaml")):
             self.generate_config_file("render.yaml")
-        
+
         return True
-    
+
     def deploy(self) -> bool:
         """
         Deploy through the Render REST API.
@@ -96,14 +80,18 @@ class RenderDeployer(BaseDeployer):
         return self._create_service(api_key, wait_timeout)
 
     def _wait_timeout(self) -> Optional[int]:
-        """Seconds to wait for a deploy to go live (0 = don't wait), or None if the config is invalid."""
+        """Seconds to wait for a deploy to go live (0 = don't wait), or None if invalid."""
         value = self.config.get("render_wait_timeout", DEFAULT_WAIT_TIMEOUT)
         if isinstance(value, bool) or not str(value).strip().isdigit():
-            self.logger.error("'render_wait_timeout' must be a whole number of seconds (0 to skip waiting).")
+            self.logger.error(
+                "'render_wait_timeout' must be a whole number of seconds (0 to skip waiting)."
+            )
             return None
         return int(str(value).strip())
 
-    def _wait_for_deploy(self, api_key: str, service_id: str, deploy_id: Optional[str], timeout: int) -> bool:
+    def _wait_for_deploy(
+        self, api_key: str, service_id: str, deploy_id: Optional[str], timeout: int
+    ) -> bool:
         """
         Poll a deploy until it is live. Never retries the deploy itself.
 
@@ -114,17 +102,22 @@ class RenderDeployer(BaseDeployer):
         if self.dry_run or not deploy_id:
             return True
         if timeout == 0:
-            self.logger.info("Not waiting for the build (render_wait_timeout is 0). Check the Render dashboard.")
+            self.logger.info(
+                "Not waiting for the build (render_wait_timeout is 0). Check the Render dashboard."
+            )
             return True
 
         deadline = time.monotonic() + timeout
         last_status = None
         try:
             while True:
-                data = self._api("GET", f"/services/{service_id}/deploys/{deploy_id}", api_key)
+                data = self._api(
+                    "GET", f"/services/{service_id}/deploys/{deploy_id}", api_key
+                )
                 if not isinstance(data, dict):
                     self.logger.error(
-                        f"Could not read the status of deploy {deploy_id}. It may still be running; "
+                        f"Could not read the status of deploy {deploy_id}. "
+                        "It may still be running; "
                         "check the Render dashboard."
                     )
                     return False
@@ -135,7 +128,9 @@ class RenderDeployer(BaseDeployer):
                 if status == "live":
                     return True
                 if status in FAILED_DEPLOY_STATUSES:
-                    self.logger.error(f"Deploy {deploy_id} did not go live: {FAILED_DEPLOY_STATUSES[status]}.")
+                    self.logger.error(
+                        f"Deploy {deploy_id} did not go live: {FAILED_DEPLOY_STATUSES[status]}."
+                    )
                     return False
                 if time.monotonic() + POLL_INTERVAL > deadline:
                     self.logger.error(
@@ -145,27 +140,37 @@ class RenderDeployer(BaseDeployer):
                     return False
                 time.sleep(POLL_INTERVAL)
         except KeyboardInterrupt:
-            self.logger.error(f"Stopped waiting. Deploy {deploy_id} continues on Render.")
+            self.logger.error(
+                f"Stopped waiting. Deploy {deploy_id} continues on Render."
+            )
             return False
 
     def _git_ready_for_render(self) -> bool:
         """Render builds from the git remote, so local-only changes would not ship."""
         status = self._run_step(["git", "status", "--porcelain"])
         if status is None:
-            self.logger.error("Render needs a git repository. Run 'git init' and push to GitHub or GitLab.")
+            self.logger.error(
+                "Render needs a git repository. Run 'git init' and push to GitHub or GitLab."
+            )
             return False
         if has_uncommitted_changes(status):
-            self.logger.error("Uncommitted changes would not be deployed. Commit them and push first.")
+            self.logger.error(
+                "Uncommitted changes would not be deployed. Commit them and push first."
+            )
             return False
         if self.dry_run:
             return True
 
         unpushed = self._run_step(["git", "rev-list", "--count", "@{u}..HEAD"])
         if unpushed is None or not unpushed.strip().isdigit():
-            self.logger.error("The current branch has no upstream. Run 'git push -u origin <branch>' first.")
+            self.logger.error(
+                "The current branch has no upstream. Run 'git push -u origin <branch>' first."
+            )
             return False
         if int(unpushed) > 0:
-            self.logger.error(f"{unpushed.strip()} commit(s) are not pushed. Push them before deploying.")
+            self.logger.error(
+                f"{unpushed.strip()} commit(s) are not pushed. Push them before deploying."
+            )
             return False
         return True
 
@@ -179,7 +184,8 @@ class RenderDeployer(BaseDeployer):
         command = str(self.config.get("start_command") or "").strip()
         if not command:
             message = (
-                "No 'start_command' in your config. Render needs a production start command, for example: "
+                "No 'start_command' in your config. Render needs a production start "
+                "command, for example: "
                 "Flask 'gunicorn app:app', Django 'gunicorn <project>.wsgi', "
                 "FastAPI 'uvicorn main:app --host 0.0.0.0 --port $PORT'. "
                 "Add it to deployment.yaml and make sure the server is in requirements.txt."
@@ -192,11 +198,14 @@ class RenderDeployer(BaseDeployer):
 
         if DEV_SERVER_PATTERN.search(command):
             self.logger.warning(
-                f"'{command}' looks like a development server. Use gunicorn or uvicorn for production."
+                f"'{command}' looks like a development server. "
+                "Use gunicorn or uvicorn for production."
             )
         return command
 
-    def _create_service(self, api_key: str, wait_timeout: int = DEFAULT_WAIT_TIMEOUT) -> bool:
+    def _create_service(
+        self, api_key: str, wait_timeout: int = DEFAULT_WAIT_TIMEOUT
+    ) -> bool:
         """Create a new Render web service from the current git branch."""
         start_command = self._resolve_start_command()
         if start_command is None:
@@ -230,7 +239,9 @@ class RenderDeployer(BaseDeployer):
         }
 
         if self.dry_run:
-            self.logger.info(f"[dry-run] would create a Render web service: {body['name']} from {repo_url}")
+            self.logger.info(
+                f"[dry-run] would create a Render web service: {body['name']} from {repo_url}"
+            )
             return True
 
         data = self._api("POST", "/services", api_key, body)
@@ -248,9 +259,13 @@ class RenderDeployer(BaseDeployer):
             f"Add 'render_service_id: {new_id}' to your deployment config so future "
             "deploys update this service instead of creating a new one."
         )
-        return self._wait_for_deploy(api_key, str(new_id), data.get("deployId"), wait_timeout)
+        return self._wait_for_deploy(
+            api_key, str(new_id), data.get("deployId"), wait_timeout
+        )
 
-    def _trigger_deploy(self, api_key: str, service_id: str, wait_timeout: int = DEFAULT_WAIT_TIMEOUT) -> bool:
+    def _trigger_deploy(
+        self, api_key: str, service_id: str, wait_timeout: int = DEFAULT_WAIT_TIMEOUT
+    ) -> bool:
         """Start a new deploy of an existing Render service."""
         deploy = self._api("POST", f"/services/{service_id}/deploys", api_key, {})
         if deploy is None:
@@ -258,8 +273,11 @@ class RenderDeployer(BaseDeployer):
 
         service = self._api("GET", f"/services/{service_id}", api_key) or {}
         self.deployed_url = (service.get("serviceDetails") or {}).get("url")
-        self.logger.info(f"Triggered a Render deploy for service {service_id}.")
-        return self._wait_for_deploy(api_key, service_id, deploy.get("id"), wait_timeout)
+        if not self.dry_run:
+            self.logger.info(f"Triggered a Render deploy for service {service_id}.")
+        return self._wait_for_deploy(
+            api_key, service_id, deploy.get("id"), wait_timeout
+        )
 
     def _resolve_owner_id(self, api_key: str) -> Optional[str]:
         """Use RENDER_OWNER_ID if set, otherwise the only owner on the account."""
@@ -291,13 +309,17 @@ class RenderDeployer(BaseDeployer):
         """Return the origin remote as an https URL, which Render requires."""
         remote = self._run_step(["git", "remote", "get-url", "origin"])
         if remote is None:
-            self.logger.error("No 'origin' git remote found. Push the project to GitHub or GitLab first.")
+            self.logger.error(
+                "No 'origin' git remote found. Push the project to GitHub or GitLab first."
+            )
             return None
         remote = remote.strip()
         if not remote:
             if self.dry_run:
                 return "https://github.com/<owner>/<repo>"
-            self.logger.error("The 'origin' git remote has no URL. Push the project to GitHub or GitLab first.")
+            self.logger.error(
+                "The 'origin' git remote has no URL. Push the project to GitHub or GitLab first."
+            )
             return None
         # Convert git@github.com:owner/repo.git into https://github.com/owner/repo
         if remote.startswith("git@"):
@@ -330,17 +352,24 @@ class RenderDeployer(BaseDeployer):
             response = requests.request(
                 method,
                 url,
-                headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Accept": "application/json",
+                },
                 json=body,
                 timeout=REQUEST_TIMEOUT,
             )
         except requests.RequestException as e:
-            self.logger.error(f"Render API request failed: {self._redact(str(e), [api_key])}")
+            self.logger.error(
+                f"Render API request failed: {self._redact(str(e), [api_key])}"
+            )
             return None
 
         if response.status_code >= 400:
             detail = self._redact(response.text[:500], [api_key])
-            self.logger.error(f"Render API returned HTTP {response.status_code} for {method} {path}: {detail}")
+            self.logger.error(
+                f"Render API returned HTTP {response.status_code} for {method} {path}: {detail}"
+            )
             return None
         if not response.content:
             return {}
@@ -348,11 +377,11 @@ class RenderDeployer(BaseDeployer):
             return response.json()
         except ValueError:
             return {}
-    
+
     def get_config_template(self) -> Dict[str, Any]:
         """
         Get Render configuration template.
-        
+
         Returns:
             Configuration template
         """
@@ -364,11 +393,13 @@ class RenderDeployer(BaseDeployer):
                     "env": "python",
                     "plan": "free",
                     "buildCommand": "pip install -r requirements.txt",
-                    "startCommand": self.config.get("start_command", "gunicorn app:app"),
+                    "startCommand": self.config.get(
+                        "start_command", "gunicorn app:app"
+                    ),
                 }
             ]
         }
-    
+
     def _check_render_config(self) -> bool:
         """Check if render.yaml exists."""
         return file_exists(str(self.project_root / "render.yaml"))
@@ -376,10 +407,6 @@ class RenderDeployer(BaseDeployer):
     def _check_requirements(self) -> bool:
         """Render's Python build installs dependencies from requirements.txt."""
         return file_exists(str(self.project_root / "requirements.txt"))
-    
-    def _check_environment_vars(self) -> bool:
-        """Environment variables must be set in the Render dashboard; they are not uploaded from .env."""
-        return True
 
     supports_live_rollback = True
 
@@ -410,7 +437,12 @@ class RenderDeployer(BaseDeployer):
         list_path = f"/services/{service_id}/deploys?limit=20"
         if self.dry_run:
             self._api("GET", list_path, api_key)
-            self._api("POST", f"/services/{service_id}/rollback", api_key, {"deployId": "<previous deploy id>"})
+            self._api(
+                "POST",
+                f"/services/{service_id}/rollback",
+                api_key,
+                {"deployId": "<previous deploy id>"},
+            )
             return True
 
         items = self._api("GET", list_path, api_key)
@@ -426,20 +458,34 @@ class RenderDeployer(BaseDeployer):
             )
             return False
 
-        message = str((target.get("commit") or {}).get("message", "")).strip().splitlines()
+        message = (
+            str((target.get("commit") or {}).get("message", "")).strip().splitlines()
+        )
         self.logger.info(
             f"Rolling back to deploy {target['id']} "
-            f"(created {target.get('createdAt', 'unknown')}, commit: {message[0][:60] if message else 'n/a'})."
+            f"(created {target.get('createdAt', 'unknown')}, "
+            f"commit: {message[0][:60] if message else 'n/a'})."
         )
         if self._same_commit_as_live(items, target):
             self.logger.warning(
-                "The deploy you are rolling back to has the same commit as the live one, so the running "
+                "The deploy you are rolling back to has the same commit as the live "
+                "one, so the running "
                 "code will not change. Render may still switch auto-deploy off."
             )
-        if self._api("POST", f"/services/{service_id}/rollback", api_key, {"deployId": target["id"]}) is None:
+        if (
+            self._api(
+                "POST",
+                f"/services/{service_id}/rollback",
+                api_key,
+                {"deployId": target["id"]},
+            )
+            is None
+        ):
             return False
 
-        self.logger.info("Render accepted the rollback. Watch the service's Events tab until it is live.")
+        self.logger.info(
+            "Render accepted the rollback. Watch the service's Events tab until it is live."
+        )
         self._report_autodeploy_state(api_key, str(service_id))
         return True
 
@@ -456,7 +502,9 @@ class RenderDeployer(BaseDeployer):
             state = service.get("autoDeployTrigger")
             if state is None:
                 legacy = service.get("autoDeploy")
-                state = {"yes": "commit", "no": "off"}.get(str(legacy)) if legacy else None
+                state = (
+                    {"yes": "commit", "no": "off"}.get(str(legacy)) if legacy else None
+                )
 
         if state == "off":
             self.logger.warning(
@@ -471,14 +519,22 @@ class RenderDeployer(BaseDeployer):
         else:
             self.logger.warning(
                 "Could not read the autodeploy setting. Check Settings > Auto-Deploy in the Render "
-                "dashboard: a rollback can turn it off, and a later commit may undo the rollback if it is on."
+                "dashboard: a rollback can turn it off, and a later commit may undo the "
+                "rollback if it is on."
             )
 
     @staticmethod
     def _same_commit_as_live(items: Any, target: Dict[str, Any]) -> bool:
         """True when the rollback target was built from the same commit as the live deploy."""
-        deploys = [(item.get("deploy") or item) for item in items if isinstance(item, dict)] if isinstance(items, list) else []
-        live = next((d for d in deploys if isinstance(d, dict) and d.get("status") == "live"), None)
+        deploys = (
+            [(item.get("deploy") or item) for item in items if isinstance(item, dict)]
+            if isinstance(items, list)
+            else []
+        )
+        live = next(
+            (d for d in deploys if isinstance(d, dict) and d.get("status") == "live"),
+            None,
+        )
         live_commit = ((live or {}).get("commit") or {}).get("id")
         target_commit = (target.get("commit") or {}).get("id")
         return bool(live_commit) and live_commit == target_commit
@@ -491,7 +547,9 @@ class RenderDeployer(BaseDeployer):
         Returns None when the live deploy was itself created by a rollback, so
         repeating the command cannot flip back and forth to the bad build.
         """
-        deploys = [(item.get("deploy") or item) for item in items if isinstance(item, dict)]
+        deploys = [
+            (item.get("deploy") or item) for item in items if isinstance(item, dict)
+        ]
         deploys = [d for d in deploys if isinstance(d, dict) and d.get("id")]
         deploys.sort(key=lambda d: str(d.get("createdAt", "")), reverse=True)
 

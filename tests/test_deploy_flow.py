@@ -101,7 +101,9 @@ def test_env_secret_never_reaches_checkpoint_or_logs(tmp_path, monkeypatch, capl
     assert secret not in repr(deployer.rollback_manager.checkpoints)
 
 
-def test_multi_platform_partial_failure_attempts_all_and_reports_each(tmp_path, monkeypatch):
+def test_multi_platform_partial_failure_attempts_all_and_reports_each(
+    tmp_path, monkeypatch
+):
     deployer, fakes = _make_deployer(
         tmp_path,
         monkeypatch,
@@ -120,7 +122,9 @@ def test_multi_platform_partial_failure_attempts_all_and_reports_each(tmp_path, 
 def test_multi_platform_migration_failure_skips_every_platform(tmp_path, monkeypatch):
     deployer, fakes = _make_deployer(tmp_path, monkeypatch, migrations_ok=False)
 
-    results = deployer.deploy_to_multiple_platforms(["render", "railway"], run_migrations=True)
+    results = deployer.deploy_to_multiple_platforms(
+        ["render", "railway"], run_migrations=True
+    )
 
     assert results == {"render": False, "railway": False}
     assert fakes == {}

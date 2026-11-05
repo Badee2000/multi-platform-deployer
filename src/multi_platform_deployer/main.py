@@ -1,80 +1,67 @@
 """
-Main entry point for the deployer.
+The Deployer class: the programmatic entry point behind the command line.
 
-This module contains the Deployer class, which is the heart of everything.
-It orchestrates:
-- Checking if your app is production-ready
-- Deploying to the right platform
-- Running migrations
-- Health checks
-- Rollbacks
+It runs readiness checks, deploys to a platform, runs migrations, checks the
+health of a deployed app and rolls back. Use it from the CLI or import it for
+scripts and CI:
 
-You can use this either through the CLI (python deploy.py) or by importing this class
-directly for scripting or CI/CD integration.
+    deployer = Deployer(".")
+    is_ready, results = deployer.check_deployment_readiness("flask")
+    if is_ready:
+        deployer.deploy("render")
 """
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
+import logging
 from pathlib import Path
-from .deployers import (
-    BaseDeployer,
-    RenderDeployer,
-    RailwayDeployer,
-    VercelDeployer,
-    HerokuDeployer,
-)
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
 from .checkers import (
     BaseChecker,
-    FlaskChecker,
+    CheckResult,
     DjangoChecker,
     FastAPIChecker,
+    FlaskChecker,
     SystemChecker,
-    CheckResult,
 )
 from .config.loader import ConfigLoader
 from .config.validator import ConfigValidator
-from .scripts.migrator import DatabaseMigrator
+from .deployers import (
+    BaseDeployer,
+    HerokuDeployer,
+    RailwayDeployer,
+    RenderDeployer,
+    VercelDeployer,
+)
 from .scripts.health_check import HealthChecker
+from .scripts.migrator import DatabaseMigrator
 from .scripts.rollback import RollbackManager
-from .utils.logger import setup_logger, get_logger
+from .utils.logger import setup_logger
 
 
 class Deployer:
     """
-    Main Deployer class - orchestrates everything.
-    
-    This is the central class that coordinates all deployment operations.
-    It's responsible for:
-    - Detecting which framework you're using (Flask, Django, FastAPI)
-    - Running readiness checks
-    - Deploying to your chosen platform(s)
-    - Managing migrations
-    - Health checks
-    - Rollbacks
-    
+    Coordinates checks, deployments, migrations, health checks and rollbacks.
+
     Example:
         deployer = Deployer(".")
         is_ready, results = deployer.check_deployment_readiness("flask")
         if is_ready:
             deployer.deploy("render", run_migrations=True)
     """
-    
-    # Map of platform names to deployer classes
-    # This is how we know which deployer to use when you pick a platform
+
     AVAILABLE_DEPLOYERS: Dict[str, Callable[..., BaseDeployer]] = {
         "render": RenderDeployer,
         "railway": RailwayDeployer,
         "vercel": VercelDeployer,
         "heroku": HerokuDeployer,
     }
-    
-    # Map of framework names to checker classes
-    # This is how we know which checks to run for Flask vs Django vs FastAPI
+
     AVAILABLE_CHECKERS: Dict[str, Callable[..., BaseChecker]] = {
         "flask": FlaskChecker,
         "django": DjangoChecker,
         "fastapi": FastAPIChecker,
     }
-    
+
     def __init__(
         self,
         project_root: str = ".",
@@ -83,49 +70,30 @@ class Deployer:
         dry_run: bool = False,
     ):
         """
-        Initialize the deployer.
-        
-        This sets up everything we need:
-        - Where your project is located
-        - Load any deployment configuration files (deployment.yaml, deployment.json)
-        - Set up logging so you can see what's happening
-        - Initialize helpers for migrations, health checks, and rollbacks
-        
         Args:
-            project_root: Root directory of your project (default: current directory)
-            config_file: Path to deployment config file (we auto-detect if not specified)
-            log_level: Logging verbosity (10=DEBUG, 20=INFO, 30=WARNING, 40=ERROR)
-        
-        Example:
-            deployer = Deployer("./my_app")
-            deployer = Deployer(".", config_file="deployment.yaml")
+            project_root: Root directory of the project.
+            config_file: Path to the deployment config. Found automatically if omitted.
+            log_level: Logging level (10 debug, 20 info, 30 warning, 40 error).
+            dry_run: Print every step and command instead of running them.
         """
         self.project_root = Path(project_root)
-        # Dry-run prints every command and skips migrations and checkpoints.
         self.dry_run = dry_run
+        self.logger = setup_logger(level=log_level or logging.INFO)
 
-        # Set to 10 for DEBUG if you want to see everything
-        self.logger = setup_logger(level=log_level or 20)
-        
-        # Load configuration from YAML/JSON files if they exist
         self.config_loader = ConfigLoader(project_root)
         self.config = self.config_loader.load_config(config_file) or {}
-        
-        # Will store deployed instances of each deployer
-        # (so we only create them when needed)
+
+        # Created on first use.
         self.deployers: Dict[str, BaseDeployer] = {}
-        
-        # Will store checker instances (for readiness validation)
         self.checkers: Dict[str, BaseChecker] = {}
         self.system_results: List[CheckResult] = []
-        
-        # Tools for migrations, health checks, and rollbacks
+
         self.migrator = DatabaseMigrator(project_root)
         self.health_checker = HealthChecker()
         self.rollback_manager = RollbackManager(project_root)
-        
-        self.logger.info(f"Deployer initialized for project: {project_root}")
-    
+
+        self.logger.debug(f"Project: {project_root}")
+
     def _run_system_checks(self) -> Tuple[bool, List[CheckResult]]:
         """Run platform-agnostic checks before any framework logic."""
 
@@ -140,210 +108,127 @@ class Deployer:
         framework: str = "flask",
     ) -> Tuple[bool, List[CheckResult]]:
         """
-        Check if application is ready for deployment.
-        
-        This is the "pre-flight check" for deployment. We validate:
-        - Do you have all required files? (requirements.txt, manage.py, etc.)
-        - Is your app configured correctly for production?
-        - Are secrets/keys properly handled (not hardcoded)?
-        - Is debug mode off?
-        - Are database connections properly configured?
-        - And much more...
-        
-        Each framework (Flask, Django, FastAPI) has specific requirements,
-        so we run framework-specific checks based on what you tell us.
-        
+        Run the system checks and the checks for one framework.
+
         Args:
-            framework: Which framework you're using (flask, django, or fastapi)
-        
+            framework: "flask", "django" or "fastapi".
+
         Returns:
-            Tuple of:
-            - is_ready (bool): True if all checks pass, False if any fail
-            - check_results (list): Detailed results for each check showing what passed/failed
-        
-        Example:
-            deployer = Deployer(".")
-            is_ready, results = deployer.check_deployment_readiness("flask")
-            
-            if is_ready:
-                print("Ready to deploy!")
-            else:
-                for result in results:
-                    if not result.passed:
-                        print(f"Fix this: {result.message}")
+            (is_ready, results). Results cover every check, passed or not.
         """
         system_ready, system_results = self._run_system_checks()
 
-        # First, make sure we know how to check this framework
-        if framework.lower() not in self.AVAILABLE_CHECKERS:
+        name = framework.lower()
+        checker_class = self.AVAILABLE_CHECKERS.get(name)
+        if checker_class is None:
             self.logger.error(f"Unknown framework: {framework}")
             return False, system_results
-        
-        # Get the right checker class for this framework
-        # (e.g., FlaskChecker for "flask")
-        checker_class = self.AVAILABLE_CHECKERS[framework.lower()]
-        
-        # Create an instance and run all the checks
+
         checker = checker_class(str(self.project_root))
         is_ready, results = checker.check_all()
-        
-        # Save the checker so we can use it later if needed
-        self.checkers[framework.lower()] = checker
-        
-        combined_results = system_results + results
-        return system_ready and is_ready, combined_results
-    
-    def initialize_deployer(
-        self,
-        platform: str,
-    ) -> Optional[BaseDeployer]:
-        """
-        Initialize a deployer for specific platform.
-        
-        Args:
-            platform: Platform name (render, railway, vercel, heroku)
-        
-        Returns:
-            Deployer instance or None
-        """
-        if platform.lower() not in self.AVAILABLE_DEPLOYERS:
+        self.checkers[name] = checker
+
+        return system_ready and is_ready, system_results + results
+
+    def initialize_deployer(self, platform: str) -> Optional[BaseDeployer]:
+        """Create and remember the deployer for a platform, or None if it is unknown."""
+        name = platform.lower()
+        deployer_class = self.AVAILABLE_DEPLOYERS.get(name)
+        if deployer_class is None:
             self.logger.error(f"Unknown platform: {platform}")
             return None
-        
-        deployer_class = self.AVAILABLE_DEPLOYERS[platform.lower()]
-        deployer = deployer_class(str(self.project_root), self.config, dry_run=self.dry_run)
-        self.deployers[platform.lower()] = deployer
-        
-        self.logger.info(f"Deployer initialized for platform: {platform}")
+
+        deployer = deployer_class(
+            str(self.project_root), self.config, dry_run=self.dry_run
+        )
+        self.deployers[name] = deployer
         return deployer
-    
+
     def validate_deployment(self, platform: str) -> bool:
-        """
-        Validate deployment configuration and readiness.
-        
-        Args:
-            platform: Platform name
-        
-        Returns:
-            True if ready to deploy
-        """
-        # Validate configuration
+        """Check the configuration and the platform's own requirements."""
         is_valid, errors = ConfigValidator.validate(self.config)
         if not is_valid:
             self.logger.error(f"Configuration validation failed: {errors}")
             return False
-        
-        # Initialize deployer
+
         deployer = self.initialize_deployer(platform)
         if not deployer:
             return False
-        
-        # Validate platform-specific requirements
+
         if not deployer.validate():
             self.logger.error(f"Validation failed for {platform}")
             return False
-        
-        self.logger.info(f"✓ Validation passed for {platform}")
+
         return True
-    
+
     def prepare_deployment(self, platform: str) -> bool:
-        """
-        Prepare deployment (generate configs, etc.).
-        
-        Args:
-            platform: Platform name
-        
-        Returns:
-            True if successful
-        """
+        """Let the platform's deployer generate any files it needs."""
         deployer = self.initialize_deployer(platform)
         if not deployer:
             return False
-        
+
         if not deployer.prepare():
             self.logger.error(f"Preparation failed for {platform}")
             return False
-        
-        self.logger.info(f"✓ Preparation completed for {platform}")
+
         return True
-    
+
     def deploy(self, platform: str, run_migrations: bool = True) -> bool:
         """
-        Execute deployment to the specified platform.
-        
-        This is where the actual magic happens. Here's what we do:
-        1. Validate everything is configured correctly
-        2. Optionally run database migrations
-        3. Ship your code to the platform
-        4. Make sure it's running
-        
-        This is a one-shot operation - you call it and your app goes live.
-        
+        Deploy to one platform.
+
+        Runs the system checks, validates the config, optionally runs database
+        migrations, then calls the platform's deployer. Failures are logged and
+        returned as False. Nothing is raised.
+
         Args:
-            platform: Which platform to deploy to (render, railway, vercel, heroku)
-            run_migrations: Whether to run database migrations first (default: True)
-        
-        Returns:
-            True if deployment succeeded, False if something went wrong
-        
-        Example:
-            deployer = Deployer(".")
-            success = deployer.deploy("render", run_migrations=True)
-            if success:
-                print("Deployed! Your app is live!")
-        
-        Raises:
-            Nothing - returns False on error instead of raising exceptions
+            platform: "render", "railway", "vercel" or "heroku".
+            run_migrations: Run database migrations before deploying.
         """
-        self.logger.info(f"Starting deployment to {platform}...")
+        self.logger.info(f"Deploying to {platform}")
 
         system_ready, system_results = self._run_system_checks()
         if not system_ready:
-            self.logger.error("Critical system checks failed; aborting deployment.")
+            self.logger.error("System checks failed. Nothing was deployed.")
             for result in system_results:
                 if not result.passed:
                     self.logger.error("  - %s: %s", result.name, result.message)
             return False
-        
-        # Step 1: Validate everything is set up correctly
-        # (configs, credentials, requirements, etc.)
-        # Fill required keys from the request when no deployment file sets them.
+
+        # Fill in required keys that no deployment file sets.
         self.config.setdefault("platform", platform)
-        self.config.setdefault("app_name", self.project_root.resolve().name.replace(" ", "-"))
+        self.config.setdefault(
+            "app_name", self.project_root.resolve().name.replace(" ", "-")
+        )
         if not self.validate_deployment(platform):
-            self.logger.error("Deployment validation failed")
+            self.logger.error("Validation failed. Nothing was deployed.")
             return False
-        
-        # Step 2: Run database migrations if the user wants
-        # (only if they have a database setup). If migrations fail, stop here:
-        # deploying new code against an unmigrated database can break the app.
+
+        # Migrations run first and stop the deploy on failure: new code against
+        # an unmigrated database can break the app.
         if run_migrations and self.dry_run:
-            self.logger.info("[dry-run] would run database migrations (skipped).")
+            self.logger.info("[dry-run] Would run database migrations.")
         elif run_migrations:
-            self.logger.info("Running database migrations...")
+            self.logger.info("Running database migrations")
             if not self.migrator.run_migrations():
-                self.logger.error("Migrations failed; aborting deployment. Nothing was deployed.")
+                self.logger.error("Migrations failed. Nothing was deployed.")
                 return False
-        
-        # Step 3: Get the right deployer for this platform and deploy
-        deployer = self.deployers.get(platform.lower())
-        if not deployer:
-            # Create a new deployer instance if we haven't already
-            deployer = self.initialize_deployer(platform)
-        
-        # Actually execute the deployment
+
+        deployer = self.deployers.get(platform.lower()) or self.initialize_deployer(
+            platform
+        )
         if not deployer or not deployer.deploy():
-            self.logger.error(f"Deployment failed for {platform}")
+            self.logger.error(f"Deployment to {platform} failed.")
             return False
 
         if self.dry_run:
             self.logger.info(f"[dry-run] Nothing was deployed to {platform}.")
             return True
-        
+
         deployed_url = getattr(deployer, "deployed_url", None)
-        self.logger.info(f"✓ Deployment completed for {platform}")
+        self.logger.info(f"Deployed to {platform}.")
         if deployed_url:
-            self.logger.info(f"  URL: {deployed_url}")
+            self.logger.info(f"URL: {deployed_url}")
 
         self.rollback_manager.create_checkpoint(
             platform=platform,
@@ -355,127 +240,70 @@ class Deployer:
             },
         )
         return True
-    
+
     def deploy_to_multiple_platforms(
         self,
         platforms: List[str],
         run_migrations: bool = True,
     ) -> Dict[str, bool]:
         """
-        Deploy to multiple platforms simultaneously.
-        
-        Want failover? Deploy to both Render AND Railway!
-        Want redundancy? Go for Render, Railway, AND Heroku!
-        
-        This method deploys to each platform sequentially but efficiently,
-        returning a report of what succeeded and what failed.
-        
-        Args:
-            platforms: List of platform names to deploy to
-            run_migrations: Whether to run migrations (applies to all platforms)
-        
+        Deploy to several platforms, one after another.
+
+        A failure on one platform does not stop the others, and a successful
+        deploy is not undone when a later one fails.
+
         Returns:
-            Dictionary mapping each platform name to success status (True/False)
-        
-        Example:
-            deployer = Deployer(".")
-            results = deployer.deploy_to_multiple_platforms(
-                ["render", "railway"],
-                run_migrations=True
-            )
-            
-            for platform, success in results.items():
-                print(f"{platform}: {'✓' if success else '✗'}")
-            
-            # Output:
-            # render: ✓
-            # railway: ✓
+            Maps each platform name to True (deployed) or False (failed).
         """
         results = {}
-        
         for platform in platforms:
-            self.logger.info(f"\nDeploying to {platform}...")
+            self.logger.info(f"\nDeploying to {platform}")
             results[platform] = self.deploy(platform, run_migrations)
-        
         return results
-    
+
     def check_health(
         self,
         base_url: str = "http://localhost:8000",
         endpoints: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
-        Check application health after deployment.
-        
-        After you deploy, you want to make sure your app actually works, right?
-        This method verifies:
-        - Your server is running and responding (the base URL answers below HTTP 500)
-        - Key endpoints return the right status codes
+        Check that a deployed app answers, and print a summary.
 
-        It does NOT verify database connectivity or response times.
-        
-        It's like a doctor's checkup for your deployed app!
-        
+        The server counts as up when the base URL answers with a status below
+        500. Each endpoint is requested and its status reported. Database
+        connectivity and response times are not checked.
+
         Args:
-            base_url: The URL of your deployed app (e.g., https://my-app.onrender.com)
-            endpoints: Optional list of specific endpoints to check
-                      (defaults to just checking the home page "/")
-        
+            base_url: Base URL of the app, for example https://my-app.onrender.com.
+            endpoints: Paths to request, appended to the base URL. Defaults to "/".
+
         Returns:
-            Dictionary with detailed health check results
-        
-        Example:
-            deployer = Deployer(".")
-            deployer.deploy("render")
-            
-            # Now verify the app is actually working
-            health = deployer.check_health(
-                base_url="https://my-app.onrender.com",
-                endpoints=["/", "/api/health", "/api/status"]
-            )
-            
-            # Returns something like:
-            # {
-            #     "server_up": True,
-            #     "endpoints": {
-            #         "/": {"status": 200, "ok": True},
-            #         "/api/health": {"status": 200, "ok": True},
-            #     }
-            # }
+            For example {"server_up": True, "endpoints": {"/": {"status": 200, "ok": True}}}.
         """
         self.health_checker.base_url = base_url
         results = self.health_checker.run_all_checks(endpoints)
         self.health_checker.print_summary(results)
-        
+
         return results
-    
+
     def rollback(self) -> bool:
         """
-        Rollback to previous deployment.
-        
-        Uh oh, something went wrong? No problem!
-        This reverts your app to the previous working version.
-        
-        It's safe, fast, and instant - users will see the old version
-        while new requests get routed back to the previous deployment.
-        
-        Returns:
-            True if rollback succeeded, False if something went wrong
-        
-        Example:
-            deployer = Deployer(".")
-            if deployer.rollback():
-                print("Rolled back successfully!")
-            else:
-                print("Rollback failed :(")
+        Restore the previous deployment snapshot and hand it to the platform.
+
+        The platform's deployer decides what that means. By default it redeploys
+        the restored code. On Render it rolls the live service back. To roll back
+        the running service without touching local files, use rollback_live().
         """
+
         def _redeploy_previous(state: Dict[str, Any]) -> bool:
             platform = state.get("platform")
             if not platform:
                 self.logger.error("Rollback state missing platform information")
                 return False
             platform = platform.lower()
-            deployer = self.deployers.get(platform) or self.initialize_deployer(platform)
+            deployer = self.deployers.get(platform) or self.initialize_deployer(
+                platform
+            )
             if not deployer:
                 return False
             return deployer.rollback(state)
@@ -492,25 +320,25 @@ class Deployer:
         if platform is None:
             records = self.rollback_manager.list_deployment_records()
             if not records:
-                self.logger.error("No deployment record found. Pass the platform explicitly.")
+                self.logger.error(
+                    "No deployment record found. Pass the platform explicitly."
+                )
                 return False
             platform = str(records[0].get("platform", ""))
         if not platform:
             self.logger.error("Deployment record has no platform information")
             return False
 
-        deployer = self.deployers.get(platform.lower()) or self.initialize_deployer(platform.lower())
+        deployer = self.deployers.get(platform.lower()) or self.initialize_deployer(
+            platform.lower()
+        )
         if not deployer:
             return False
         return deployer.rollback_live()
-    
+
     def print_summary(self) -> None:
-        """Print deployment summary."""
-        print("\n" + "="*60)
-        print("Deployment Summary")
-        print("="*60)
-        print(f"Project Root: {self.project_root}")
+        """Print the project root, configuration and available deployers and checkers."""
+        print(f"Project root: {self.project_root}")
         print(f"Configuration: {self.config}")
-        print(f"Available Deployers: {', '.join(self.AVAILABLE_DEPLOYERS.keys())}")
-        print(f"Available Checkers: {', '.join(self.AVAILABLE_CHECKERS.keys())}")
-        print("="*60 + "\n")
+        print(f"Deployers: {', '.join(self.AVAILABLE_DEPLOYERS)}")
+        print(f"Checkers: {', '.join(self.AVAILABLE_CHECKERS)}")

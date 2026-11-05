@@ -71,12 +71,18 @@ def test_deploy_keeps_app_name_from_deployment_file(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("platform", ["vercel", "render", "railway", "heroku"])
-def test_dry_run_without_credentials_still_exits_cleanly(tmp_path, monkeypatch, platform):
+def test_dry_run_without_credentials_still_exits_cleanly(
+    tmp_path, monkeypatch, platform
+):
     for var in ("VERCEL_TOKEN", "RENDER_API_KEY", "RAILWAY_TOKEN", "HEROKU_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(Deployer, "_run_system_checks", lambda self: (True, []))
     monkeypatch.setattr(Deployer, "validate_deployment", lambda self, p: True)
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("executed")))
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("executed")),
+    )
 
     deployer = Deployer(str(tmp_path), dry_run=True)
     assert deployer.deploy(platform) is True

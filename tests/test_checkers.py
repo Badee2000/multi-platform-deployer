@@ -1,19 +1,21 @@
 """Tests for deployment checkers."""
 
-import pytest
 import tempfile
 from pathlib import Path
+
+import pytest
+
 from multi_platform_deployer.checkers import (
-    FlaskChecker,
     DjangoChecker,
     FastAPIChecker,
+    FlaskChecker,
     SystemChecker,
 )
 
 
 class TestFlaskChecker:
     """Test FlaskChecker class."""
-    
+
     @pytest.fixture
     def temp_project(self):
         """Create temporary Flask project."""
@@ -33,41 +35,41 @@ def health():
 if __name__ == '__main__':
     app.run(debug=False)
 """)
-            
+
             req_file = Path(tmpdir) / "requirements.txt"
             req_file.write_text("Flask==2.0.0\n")
-            
+
             yield tmpdir
-    
+
     def test_check_all(self, temp_project):
         """Test comprehensive Flask checks."""
         checker = FlaskChecker(temp_project)
         is_ready, results = checker.check_all()
-        
+
         # Should have multiple checks
         assert len(results) > 0
         # Check that there are results
         assert any(r.passed for r in results)
-    
+
     def test_check_flask_app(self, temp_project):
         """Test Flask app detection."""
         checker = FlaskChecker(temp_project)
         result = checker.check_flask_app()
-        
+
         assert result.passed is True
-    
+
     def test_check_debug_mode(self, temp_project):
         """Test debug mode check."""
         checker = FlaskChecker(temp_project)
         result = checker.check_debug_mode()
-        
+
         # Since we set debug=False, this should pass
         assert result.passed is True
 
 
 class TestDjangoChecker:
     """Test DjangoChecker class."""
-    
+
     @pytest.fixture
     def temp_project(self):
         """Create temporary Django project."""
@@ -75,7 +77,7 @@ class TestDjangoChecker:
             # Create manage.py
             manage_file = Path(tmpdir) / "manage.py"
             manage_file.write_text("#!/usr/bin/env python")
-            
+
             # Create settings.py
             settings_file = Path(tmpdir) / "settings.py"
             settings_file.write_text("""
@@ -93,21 +95,21 @@ SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 """)
-            
+
             yield tmpdir
-    
+
     def test_check_all(self, temp_project):
         """Test comprehensive Django checks."""
         checker = DjangoChecker(temp_project)
         is_ready, results = checker.check_all()
-        
+
         assert len(results) > 0
-    
+
     def test_check_manage_py(self, temp_project):
         """Test manage.py detection."""
         checker = DjangoChecker(temp_project)
         result = checker.check_manage_py()
-        
+
         assert result.passed is True
 
     def test_environment_driven_settings_pass_all_checks(self, tmp_path):
@@ -118,15 +120,16 @@ CSRF_COOKIE_SECURE = True
         config = tmp_path / "config"
         config.mkdir()
         (config / "settings.py").write_text(
-            'import os\n'
+            "import os\n"
             'SECRET_KEY = os.environ.get("SECRET_KEY")\n'
             'DEBUG = os.environ.get("DJANGO_DEBUG") == "1"\n'
             'ALLOWED_HOSTS = [h for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h]\n'
-            'DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": "db.sqlite3"}}\n'
+            'DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", '
+            '"NAME": "db.sqlite3"}}\n'
             'STATIC_ROOT = "staticfiles"\n'
-            'SECURE_SSL_REDIRECT = not DEBUG\n'
-            'SESSION_COOKIE_SECURE = not DEBUG\n'
-            'CSRF_COOKIE_SECURE = not DEBUG\n'
+            "SECURE_SSL_REDIRECT = not DEBUG\n"
+            "SESSION_COOKIE_SECURE = not DEBUG\n"
+            "CSRF_COOKIE_SECURE = not DEBUG\n"
         )
 
         is_ready, results = DjangoChecker(str(tmp_path)).check_all()
@@ -136,7 +139,7 @@ CSRF_COOKIE_SECURE = True
 
 class TestFastAPIChecker:
     """Test FastAPIChecker class."""
-    
+
     @pytest.fixture
     def temp_project(self):
         """Create temporary FastAPI project."""
@@ -162,24 +165,24 @@ def health():
 async def exception_handler(request, exc):
     return {"error": str(exc)}
 """)
-            
+
             req_file = Path(tmpdir) / "requirements.txt"
             req_file.write_text("fastapi==0.95.0\nuvicorn==0.21.0\n")
-            
+
             yield tmpdir
-    
+
     def test_check_all(self, temp_project):
         """Test comprehensive FastAPI checks."""
         checker = FastAPIChecker(temp_project)
         is_ready, results = checker.check_all()
-        
+
         assert len(results) > 0
-    
+
     def test_check_fastapi_app(self, temp_project):
         """Test FastAPI app detection."""
         checker = FastAPIChecker(temp_project)
         result = checker.check_fastapi_app()
-        
+
         assert result.passed is True
 
 
@@ -193,9 +196,15 @@ class TestSystemChecker:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             (tmp_path / "runtime.txt").write_text("python-3.11.0\n", encoding="utf-8")
-            (tmp_path / "requirements.txt").write_text("Flask==2.3.2\n", encoding="utf-8")
-            (tmp_path / "deployment.yaml").write_text("platform: render\n", encoding="utf-8")
-            (tmp_path / ".env").write_text("SECRET_KEY=super-secret-value\n", encoding="utf-8")
+            (tmp_path / "requirements.txt").write_text(
+                "Flask==2.3.2\n", encoding="utf-8"
+            )
+            (tmp_path / "deployment.yaml").write_text(
+                "platform: render\n", encoding="utf-8"
+            )
+            (tmp_path / ".env").write_text(
+                "SECRET_KEY=super-secret-value\n", encoding="utf-8"
+            )
             yield tmpdir
 
     def test_system_checker_passes(self, healthy_project):

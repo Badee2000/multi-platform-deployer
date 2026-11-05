@@ -19,7 +19,9 @@ import pytest
 import requests
 
 LIVE = os.environ.get("MPD_LIVE_TESTS") == "1"
-pytestmark = pytest.mark.skipif(not LIVE, reason="set MPD_LIVE_TESTS=1 to run live credential checks")
+pytestmark = pytest.mark.skipif(
+    not LIVE, reason="set MPD_LIVE_TESTS=1 to run live credential checks"
+)
 
 
 def _run_whoami(cli: str, args, env_name: str):

@@ -1,42 +1,33 @@
 """Railway platform deployer."""
 
-from typing import Dict, Any
-from .base import BaseDeployer
+from typing import Any, Dict
+
 from ..utils.helpers import file_exists
+from .base import BaseDeployer
 
 
 class RailwayDeployer(BaseDeployer):
     """Deployer for Railway.app platform."""
-    
+
     @staticmethod
     def get_platform_name() -> str:
         """Get platform name."""
         return "Railway"
-    
+
     def validate(self) -> bool:
-        """
-        Validate Railway deployment readiness.
-        
-        Returns:
-            True if ready to deploy
-        """
-        self.logger.info("Validating Railway deployment readiness...")
-        
-        checks = [
-            (self._check_requirements, "requirements.txt"),
-            (self._check_procfile, "Start command (Procfile, railway.json or start_command in config)"),
-        ]
-        
-        all_valid = True
-        for check_func, description in checks:
-            if not check_func():
-                self.logger.warning(f"❌ {description} check failed")
-                all_valid = False
-            else:
-                self.logger.info(f"✓ {description} check passed")
-        
-        return all_valid
-    
+        """Check that the project has what Railway needs."""
+        self.logger.info("Validating Railway deployment readiness")
+
+        return self._run_checks(
+            [
+                (self._check_requirements, "requirements.txt"),
+                (
+                    self._check_procfile,
+                    "Start command (Procfile, railway.json or start_command in config)",
+                ),
+            ]
+        )
+
     def prepare(self) -> bool:
         """
         Prepare Railway deployment.
@@ -44,17 +35,19 @@ class RailwayDeployer(BaseDeployer):
         railway.json is only generated when 'start_command' is set in your config,
         so the command you chose is used. Without it, a Procfile or an existing
         railway.json decides how the app starts. Nothing is guessed.
-        
+
         Returns:
             True if preparation successful
         """
         self.logger.info("Preparing Railway deployment...")
-        
-        if not file_exists(str(self.project_root / "railway.json")) and self.config.get("start_command"):
+
+        if not file_exists(str(self.project_root / "railway.json")) and self.config.get(
+            "start_command"
+        ):
             self.generate_config_file("railway.json")
-        
+
         return True
-    
+
     def deploy(self) -> bool:
         """
         Deploy with the Railway CLI.
@@ -90,13 +83,15 @@ class RailwayDeployer(BaseDeployer):
             self.logger.error("Railway deployment failed; see the output above.")
             return False
 
-        self.logger.info("Railway deployment finished. Run 'railway domain' to get the public URL.")
+        self.logger.info(
+            "Railway deployment finished. Run 'railway domain' to get the public URL."
+        )
         return True
-    
+
     def get_config_template(self) -> Dict[str, Any]:
         """
         Get Railway configuration template.
-        
+
         Returns:
             Configuration template
         """
@@ -109,21 +104,20 @@ class RailwayDeployer(BaseDeployer):
             deploy["startCommand"] = str(start_command)
         return {
             "$schema": "https://railway.app/railway.schema.json",
-            "build": {
-                "builder": "NIXPACKS"
-            },
+            "build": {"builder": "NIXPACKS"},
             "deploy": deploy,
         }
-    
+
     def _check_requirements(self) -> bool:
         """Railway's Nixpacks builder installs dependencies from requirements.txt."""
         return file_exists(str(self.project_root / "requirements.txt"))
 
     def _check_railway_config(self) -> bool:
         """Check if railway.json exists."""
-        return file_exists(str(self.project_root / "railway.json")) or \
-               file_exists(str(self.project_root / "railway.yaml"))
-    
+        return file_exists(str(self.project_root / "railway.json")) or file_exists(
+            str(self.project_root / "railway.yaml")
+        )
+
     def _check_procfile(self) -> bool:
         """Check that a start command is configured."""
         procfile_exists = file_exists(str(self.project_root / "Procfile"))
@@ -132,6 +126,10 @@ class RailwayDeployer(BaseDeployer):
 
     def rollback(self, deployment_state: Dict[str, Any]) -> bool:
         """Redeploy restored snapshot for Railway deployments."""
-        self.logger.info("Triggering Railway rollback by redeploying restored snapshot...")
-        self.logger.info("Run 'railway up' to redeploy or push restored code to your repo.")
+        self.logger.info(
+            "Triggering Railway rollback by redeploying restored snapshot..."
+        )
+        self.logger.info(
+            "Run 'railway up' to redeploy or push restored code to your repo."
+        )
         return super().rollback(deployment_state)

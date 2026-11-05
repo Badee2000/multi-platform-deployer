@@ -1,12 +1,12 @@
 """Helper functions for deployment operations."""
 
-import subprocess
-import os
-from typing import Dict, List, Any, Optional
-from pathlib import Path
 import json
-import yaml
+import os
+import subprocess
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
+import yaml
 
 __all__ = [
     "run_command",
@@ -20,6 +20,7 @@ __all__ = [
     "dir_exists",
 ]
 
+
 def run_command(
     command: List[str],
     cwd: Optional[str] = None,
@@ -29,7 +30,7 @@ def run_command(
 ) -> subprocess.CompletedProcess:
     """
     Run a shell command and return the result.
-    
+
     Args:
         command: Command and arguments as list
         cwd: Working directory for command
@@ -37,7 +38,7 @@ def run_command(
         check: Raise exception if command fails
         timeout: Seconds before the command is killed (None means no limit).
             Raises subprocess.TimeoutExpired when exceeded.
-    
+
     Returns:
         CompletedProcess instance
     """
@@ -48,7 +49,7 @@ def run_command(
                 full_env.pop(key, None)
             else:
                 full_env[key] = value
-    
+
     return subprocess.run(
         command,
         cwd=cwd,

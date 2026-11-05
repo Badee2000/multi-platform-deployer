@@ -1,8 +1,9 @@
 """Vercel platform deployer."""
 
-from typing import Dict, Any
-from .base import BaseDeployer
+from typing import Any, Dict
+
 from ..utils.helpers import file_exists
+from .base import BaseDeployer
 
 
 class VercelDeployer(BaseDeployer):
@@ -12,39 +13,36 @@ class VercelDeployer(BaseDeployer):
     # under src/ and app/). manage.py covers Django, which Vercel resolves from
     # WSGI_APPLICATION. api/index.py is the older layout and still works.
     ENTRY_POINTS = (
-        "app.py", "index.py", "server.py", "main.py", "wsgi.py", "asgi.py", "manage.py", "api/index.py",
+        "app.py",
+        "index.py",
+        "server.py",
+        "main.py",
+        "wsgi.py",
+        "asgi.py",
+        "manage.py",
+        "api/index.py",
     )
     ENTRY_POINT_DIRS = ("", "src/", "app/")
-    
+
     @staticmethod
     def get_platform_name() -> str:
         """Get platform name."""
         return "Vercel"
-    
+
     def validate(self) -> bool:
-        """
-        Validate Vercel deployment readiness.
-        
-        Returns:
-            True if ready to deploy
-        """
-        self.logger.info("Validating Vercel deployment readiness...")
-        
-        checks = [
-            (self._check_api_routes, "Python entry point (app.py, main.py, wsgi.py, asgi.py, manage.py, ...)"),
-            (self._check_requirements, "requirements.txt"),
-        ]
-        
-        all_valid = True
-        for check_func, description in checks:
-            if not check_func():
-                self.logger.warning(f"❌ {description} check failed")
-                all_valid = False
-            else:
-                self.logger.info(f"✓ {description} check passed")
-        
-        return all_valid
-    
+        """Check that the project has what Vercel needs."""
+        self.logger.info("Validating Vercel deployment readiness")
+
+        return self._run_checks(
+            [
+                (
+                    self._check_api_routes,
+                    "Python entry point (app.py, main.py, wsgi.py, asgi.py, manage.py, ...)",
+                ),
+                (self._check_requirements, "requirements.txt"),
+            ]
+        )
+
     def prepare(self) -> bool:
         """
         Prepare Vercel deployment.
@@ -55,9 +53,11 @@ class VercelDeployer(BaseDeployer):
         Returns:
             True if preparation successful
         """
-        self.logger.info("Preparing Vercel deployment (no vercel.json needed for Flask, FastAPI or Django)...")
+        self.logger.info(
+            "Preparing Vercel deployment (no vercel.json needed for Flask, FastAPI or Django)..."
+        )
         return True
-    
+
     def deploy(self) -> bool:
         """
         Deploy to production with the Vercel CLI.
@@ -78,11 +78,17 @@ class VercelDeployer(BaseDeployer):
             self.logger.error("Vercel deployment failed; see the output above.")
             return False
 
-        urls = [line.strip() for line in output.splitlines() if line.strip().startswith("https://")]
+        urls = [
+            line.strip()
+            for line in output.splitlines()
+            if line.strip().startswith("https://")
+        ]
         self.deployed_url = urls[-1] if urls else None
-        self.logger.info(f"Vercel deployment finished: {self.deployed_url or 'URL not reported'}")
+        self.logger.info(
+            f"Vercel deployment finished: {self.deployed_url or 'URL not reported'}"
+        )
         return True
-    
+
     def get_config_template(self) -> Dict[str, Any]:
         """
         Get Vercel configuration template.
@@ -94,7 +100,7 @@ class VercelDeployer(BaseDeployer):
             An empty template
         """
         return {}
-    
+
     def _check_api_routes(self) -> bool:
         """Check that a Python entry point Vercel can detect exists."""
         return any(

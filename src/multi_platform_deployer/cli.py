@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+import yaml
 
 from .main import Deployer
 from .utils.logger import setup_logger
@@ -24,12 +27,18 @@ def clear_screen() -> None:
     os.system("cls" if os.name == "nt" else "clear")
 
 
-def print_banner() -> None:
-    """Print the CLI banner."""
+def heading(title: str) -> None:
+    """Print a section title with an underline."""
+    print(f"\n{title}")
+    print("-" * len(title))
 
-    print("\n" + "=" * 60)
-    print("  🚀 MULTI-PLATFORM DEPLOYER")
-    print("=" * 60 + "\n")
+
+def print_check_results(results: List[Any], failures_only: bool = False) -> None:
+    """Print readiness results, one line each, or only the failed ones."""
+    for result in results:
+        if result.passed and failures_only:
+            continue
+        print(f"  {result}")
 
 
 def detect_framework() -> Optional[str]:
@@ -92,43 +101,32 @@ def choose_option(question: str, options: List[str]) -> str:
 
 
 def check_readiness() -> bool:
-    """Run interactive readiness checks."""
-
+    """Run the readiness checks and print every result."""
     clear_screen()
-    print_banner()
-    print("📋 CHECKING DEPLOYMENT READINESS")
-    print("-" * 60)
+    heading("Readiness check")
 
     framework = detect_framework()
-    if not framework:
-        print("\n⚠️  Could not auto-detect framework.")
+    if framework:
+        print(f"Detected framework: {framework}")
+    else:
+        print("Could not detect the framework.")
         framework = choose_option(
             "Which framework are you using?",
             ["Flask", "Django", "FastAPI"],
         ).lower()
-    else:
-        print(f"\n✓ Detected: {framework.upper()}")
 
-    print(f"\n🔍 Analyzing your {framework.upper()} application...")
     deployer = Deployer(".")
     is_ready, results = deployer.check_deployment_readiness(framework)
 
-    print("\n" + "=" * 60)
-    for result in results:
-        icon = "✓" if result.passed else "✗"
-        status = "PASS" if result.passed else "FAIL"
-        category = getattr(result, "category", "framework").upper()
-        print(f"{icon} [{category:<8}] {result.name:<30} [{status}]")
-        if result.message:
-            print(f"  └─ {result.message}")
-    print("=" * 60)
+    print()
+    print_check_results(results)
 
     if is_ready:
-        print("\n✅ YOUR APPLICATION IS READY FOR DEPLOYMENT!\n")
+        print("\nYour application is ready to deploy.\n")
         return True
 
     failures = sum(1 for result in results if not result.passed)
-    print(f"\n❌ {failures} ISSUE(S) FOUND - fix before deploying\n")
+    print(f"\n{failures} check(s) failed. Fix them before deploying.\n")
     return False
 
 
@@ -138,26 +136,22 @@ def deploy(
     run_migrations: bool = False,
 ) -> bool:
     """
-    Deploy a single platform.
+    Deploy to one platform. Returns True on success.
 
-    Without a platform, runs the interactive wizard. With one, runs
-    non-interactively (used by 'run --platform ...' and CI).
-    Returns True on success.
+    Without a platform, asks the questions interactively. With one, runs
+    without prompts, which is what scripts and CI use.
     """
     interactive = platform is None
 
     if interactive:
         clear_screen()
-    print_banner()
-    print("🚀 DEPLOYMENT WIZARD" if interactive else "🚀 DEPLOYMENT")
-    print("-" * 60)
     if dry_run:
-        print("🔍 DRY RUN: commands will be printed, nothing will be executed.\n")
+        print("Dry run: commands are printed and nothing is executed.\n")
 
     framework = detect_framework()
     if framework is None:
         if not interactive:
-            print("❌ Could not detect the framework (Flask, Django or FastAPI).\n")
+            print("Could not detect the framework (Flask, Django or FastAPI).\n")
             return False
         framework = choose_option(
             "Which framework are you using?",
@@ -165,10 +159,13 @@ def deploy(
         ).lower()
 
     deployer = Deployer(".", dry_run=dry_run)
-    is_ready, _ = deployer.check_deployment_readiness(framework)
+    is_ready, results = deployer.check_deployment_readiness(framework)
     if not is_ready:
-        print("\n❌ Application not ready for deployment.\n")
+        print("Readiness checks failed:")
+        print_check_results(results, failures_only=True)
+        print("\nFix these before deploying.\n")
         return False
+    print(f"Readiness checks passed ({len(results)}).\n")
 
     if interactive:
         platform = choose_option(
@@ -179,18 +176,17 @@ def deploy(
 
     if platform is None:
         return False
-    print(f"\n⏳ {'Planning' if dry_run else 'Deploying'} to {platform.upper()}...")
     success = deployer.deploy(platform, run_migrations=run_migrations)
 
     if not success:
-        print("\n❌ DEPLOYMENT FAILED\n")
+        print("\nDeployment failed.\n")
         return False
 
     if dry_run:
-        print("\n✅ DRY RUN COMPLETE. Re-run without --dry-run to deploy.\n")
+        print("\nDry run complete. Run again without --dry-run to deploy.\n")
         return True
 
-    print(f"\n✅ DEPLOYMENT SUCCESSFUL on {platform.upper()}!\n")
+    print(f"\nDeployed to {platform}.\n")
     if interactive and ask_yes_no("Check application health?"):
         url = input("Enter your app URL: ").strip()
         deployer.check_health(url)
@@ -198,22 +194,24 @@ def deploy(
 
 
 def multi_deploy() -> bool:
-    """Deploy to multiple platforms interactively. Returns True only if every platform succeeded."""
-
+    """Deploy to several platforms interactively. True only if every one succeeded."""
     clear_screen()
-    print_banner()
-    print("🚀 MULTI-PLATFORM DEPLOYMENT")
-    print("-" * 60)
+    heading("Deploy to multiple platforms")
 
-    framework = detect_framework() or choose_option(
-        "Which framework are you using?",
-        ["Flask", "Django", "FastAPI"],
-    ).lower()
+    framework = (
+        detect_framework()
+        or choose_option(
+            "Which framework are you using?",
+            ["Flask", "Django", "FastAPI"],
+        ).lower()
+    )
 
     deployer = Deployer(".")
-    is_ready, _ = deployer.check_deployment_readiness(framework)
+    is_ready, checks = deployer.check_deployment_readiness(framework)
     if not is_ready:
-        print("\n❌ Application not ready for deployment.\n")
+        print("Readiness checks failed:")
+        print_check_results(checks, failures_only=True)
+        print("\nFix these before deploying.\n")
         return False
 
     print("\nSelect platforms to deploy to (comma-separated numbers):")
@@ -235,73 +233,48 @@ def multi_deploy() -> bool:
         return False
 
     run_migrations = ask_yes_no("Run database migrations?")
-    print(f"\n⏳ Deploying to: {', '.join(p.upper() for p in selected)}...")
     results = deployer.deploy_to_multiple_platforms(selected, run_migrations)
 
-    print("\n" + "=" * 60)
-    print("DEPLOYMENT RESULTS:")
-    print("=" * 60)
+    print("\nResults")
     for platform, success in results.items():
-        icon = "✓" if success else "✗"
-        status = "SUCCESS" if success else "FAILED"
-        print(f"{icon} {platform.upper():<20} [{status}]")
-    print("\n")
+        print(f"  {platform:<10} {'deployed' if success else 'FAILED'}")
+    print()
     return bool(results) and all(results.values())
 
 
 def show_project_info() -> None:
-    """Display project metadata and detected files."""
-
+    """Show the project location and which common files exist."""
     clear_screen()
-    print_banner()
     cwd = Path(".")
 
-    has_requirements = (cwd / "requirements.txt").exists()
-    has_config = any(cwd.glob("deployment.*"))
-    has_env = (cwd / ".env").exists()
-
-    print("📁 PROJECT INFORMATION")
-    print("-" * 60)
-    print(f"\n📍 Location: {cwd.absolute()}")
-    print("\n📦 Files detected:")
-    print(f"  {'✓' if has_requirements else '✗'} requirements.txt")
-    print(f"  {'✓' if has_config else '✗'} deployment config")
-    print(f"  {'✓' if has_env else '✗'} .env file")
+    heading("Project information")
+    print(f"Location: {cwd.absolute()}")
 
     framework = detect_framework()
-    print(f"\n🐍 Detected Framework: {framework.upper() if framework else 'Unknown'}")
+    print(f"Framework: {framework or 'not detected'}")
 
-    print("\n📄 Common files:")
+    print("\nFiles:")
+    has_config = any(cwd.glob("deployment.*"))
+    print(f"  {'found  ' if has_config else 'missing'}  deployment config")
     for file_name in ["app.py", "manage.py", "wsgi.py", "requirements.txt", ".env"]:
-        exists = "✓" if (cwd / file_name).exists() else "✗"
-        print(f"  {exists} {file_name}")
-    print("\n")
+        found = (cwd / file_name).exists()
+        print(f"  {'found  ' if found else 'missing'}  {file_name}")
+    print()
 
 
 def quick_check() -> None:
-    """Run a terse readiness check."""
-
-    deployer = Deployer(".")
+    """Run a short readiness check."""
     framework = detect_framework()
     if not framework:
-        print("Could not detect framework.")
+        print("Could not detect the framework.")
         return
 
-    print(f"\n🔍 Checking {framework.upper()} app...")
+    deployer = Deployer(".")
     is_ready, results = deployer.check_deployment_readiness(framework)
 
-    print("\n" + "=" * 60)
-    for result in results:
-        icon = "✓" if result.passed else "✗"
-        category = getattr(result, "category", "framework").upper()
-        message = f" - {result.message}" if result.message else ""
-        print(f"{icon} [{category:<8}] {result.name}{message}")
-    print("=" * 60)
-
-    if is_ready:
-        print("\n✅ Ready to deploy!\n")
-    else:
-        print("\n❌ Not ready yet.\n")
+    print()
+    print_check_results(results)
+    print("\nReady to deploy.\n" if is_ready else "\nNot ready yet.\n")
 
 
 def _write_env_values(env_vars: dict, env_path: Path) -> Tuple[List[str], List[str]]:
@@ -349,10 +322,14 @@ def _ensure_env_is_gitignored(project_dir: Path) -> bool:
     gitignore = project_dir / ".gitignore"
     covered = {".env", "/.env", ".env*", "*.env"}
     if gitignore.exists():
-        entries = {line.strip() for line in gitignore.read_text(encoding="utf-8").splitlines()}
+        entries = {
+            line.strip() for line in gitignore.read_text(encoding="utf-8").splitlines()
+        }
         if entries & covered:
             return False
-        needs_newline = gitignore.stat().st_size > 0 and not gitignore.read_bytes().endswith(b"\n")
+        needs_newline = (
+            gitignore.stat().st_size > 0 and not gitignore.read_bytes().endswith(b"\n")
+        )
     else:
         needs_newline = False
 
@@ -364,14 +341,10 @@ def _ensure_env_is_gitignored(project_dir: Path) -> bool:
 
 
 def setup_wizard() -> None:
-    """Interactive wizard to create deployment.yaml file."""
-
+    """Ask a few questions and write deployment.yaml (or deployment.json)."""
     clear_screen()
-    print_banner()
-    print("⚙️  DEPLOYMENT CONFIGURATION WIZARD")
-    print("-" * 60)
+    heading("Deployment setup")
 
-    # Check if deployment config already exists
     cwd = Path(".")
     existing_config = None
     for config_file in ["deployment.yaml", "deployment.yml", "deployment.json"]:
@@ -380,42 +353,37 @@ def setup_wizard() -> None:
             break
 
     if existing_config:
-        if not ask_yes_no(f"\n⚠️  Found existing {existing_config}. Overwrite it?"):
+        if not ask_yes_no(f"Found existing {existing_config}. Overwrite it?"):
             print("\nSetup cancelled.\n")
             return
 
-    print("\n📋 Let's set up your deployment configuration!\n")
-
-    # Ask for platform
     platform = choose_option(
         "Which platform do you want to deploy to?",
         ["Render", "Railway", "Vercel", "Heroku"],
     ).lower()
 
-    # Ask for app name
     while True:
         app_name = input("\nEnter your app name (no spaces): ").strip()
         if app_name and " " not in app_name:
             break
         print("Please enter a valid app name without spaces.")
 
-    # Ask for environment variables
     config_data: Dict[str, Any] = {
         "platform": platform,
         "app_name": app_name,
     }
 
-    # The start command is optional here, but Render needs one for the first deploy
-    # and no single default fits Flask, Django and FastAPI.
+    # Optional here, but Render needs one for the first deploy and no single
+    # default fits Flask, Django and FastAPI.
     start_command = input(
         "\nProduction start command, e.g. 'gunicorn wsgi:app' (Enter to skip): "
     ).strip()
     if start_command:
         config_data["start_command"] = start_command
 
-    if ask_yes_no("\nAdd environment variables?"):
+    if ask_yes_no("Add environment variables?"):
         env_vars = {}
-        print("\n(Enter each as KEY=VALUE, blank line to finish)")
+        print("\nEnter each as KEY=VALUE. Leave the line blank to finish.")
         while True:
             env_input = input("  > ").strip()
             if not env_input:
@@ -428,81 +396,62 @@ def setup_wizard() -> None:
         if env_vars:
             written, skipped = _write_env_values(env_vars, cwd / ".env")
             if written:
-                print(f"\n🔐 Saved to .env: {', '.join(written)}")
+                print(f"\nSaved to .env: {', '.join(written)}")
             if skipped:
-                print(f"⚠️  Already in .env, left unchanged: {', '.join(skipped)}")
+                print(f"Already in .env, left unchanged: {', '.join(skipped)}")
             if _ensure_env_is_gitignored(cwd):
-                print("   Added .env to .gitignore so it is not committed.")
-            print("   Values are stored only in .env, not in the deployment config.")
-            print("   They are not uploaded to the platform. Set them in its dashboard.")
+                print("Added .env to .gitignore so it is not committed.")
+            print("Values are stored only in .env, not in the deployment config.")
+            print("They are not uploaded to the platform. Set them in its dashboard.")
 
-    # Write configuration
-    use_json = ask_yes_no("\nUse JSON format (vs YAML)?")
-
-    if use_json:
-        import json
+    if ask_yes_no("Use JSON instead of YAML?"):
         config_path = cwd / "deployment.json"
-        with open(config_path, "w") as f:
+        with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config_data, f, indent=2)
-        print(f"\n✅ Created {config_path.name}")
     else:
-        import yaml
         config_path = cwd / "deployment.yaml"
-        with open(config_path, "w") as f:
+        with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
-        print(f"\n✅ Created {config_path.name}")
 
-    print(f"\n📝 Configuration saved!")
-    print(f"\nYou can now run: py deploy.py run\n")
+    print(f"\nCreated {config_path.name}.")
+    print("Next: multi-platform-deployer check\n")
 
 
 def show_help() -> None:
     """Print CLI help."""
-
-    print(
-        """
-===============================================================
-          MULTI-PLATFORM DEPLOYER - CLI
-===============================================================
+    print("""
+multi-platform-deployer: check a Flask, Django or FastAPI app and deploy it.
 
 USAGE:
     multi-platform-deployer <command> [options]
-    py deploy.py <command> [options]        (if you added the deploy.py shim)
     python -m multi_platform_deployer.cli <command> [options]
 
 COMMANDS:
-    setup              Create deployment.yaml configuration (first time?)
-    check              Check if your app is ready for deployment
-    run                Deploy your app (use --multi for multiple platforms)
-    info               Show project information
-    health             Check deployed app health
-    rollback           Rollback to previous deployment (--live: roll back the running Render service)
-
-EXAMPLES:
-    py deploy.py setup
-    py deploy.py check
-    py deploy.py run
-    py deploy.py run --multi
-    py deploy.py info
-    py deploy.py health --url https://...
-    py deploy.py rollback
-    py deploy.py rollback --live --dry-run
+    setup       Create the deployment config (deployment.yaml)
+    check       Check that your app is ready to deploy
+    run         Deploy your app
+    info        Show project information
+    health      Check that a deployed app is up
+    rollback    Restore the previous snapshot, or with --live roll back the running Render service
 
 OPTIONS:
-    --multi            Deploy to multiple platforms (with 'run')
-    --url URL          App URL for health check
-    --endpoints PATHS  Comma-separated endpoints to check (default: /)
-    --live             With 'rollback': roll back the running service on the platform (Render only)
-    -h, --help         Show this help message
+    --platform NAME    With 'run': deploy without prompts (render, railway, vercel or heroku)
+    --multi            With 'run': deploy to several platforms
+    --dry-run          With 'run' or 'rollback --live': print the steps and change nothing
+    --migrate          With 'run': run database migrations first
+    --url URL          With 'health': base URL of the app
+    --endpoints PATHS  With 'health': comma-separated paths to request (default: /)
+    --live             With 'rollback': roll back the running service (Render only)
+    -h, --help         Show this help
 
-WORKFLOW:
-    1. py deploy.py setup   (create deployment config)
-    2. py deploy.py check   (verify app is ready)
-    3. py deploy.py run     (deploy your app)
-    4. py deploy.py health --url <your-url>
-
-"""
-    )
+EXAMPLES:
+    multi-platform-deployer setup
+    multi-platform-deployer check
+    multi-platform-deployer run --platform render --dry-run
+    multi-platform-deployer run --platform render
+    multi-platform-deployer health --url https://my-app.onrender.com --endpoints /,/health
+    multi-platform-deployer rollback --live --dry-run
+""")
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
@@ -534,16 +483,12 @@ def cmd_info(args: argparse.Namespace) -> int:
 def cmd_health(args: argparse.Namespace) -> int:
     url = args.url or input("Enter your deployed app URL: ").strip()
     if not url:
-        print("❌ URL is required for health check.\n")
+        print("A URL is required for the health check.\n")
         return 1
 
     deployer = Deployer(".")
-    endpoints = (
-        args.endpoints.split(",")
-        if args.endpoints
-        else ["/"]
-    )
-    print(f"\n🏥 Checking health of {url}...")
+    endpoints = args.endpoints.split(",") if args.endpoints else ["/"]
+    print(f"\nChecking {url}")
     health = deployer.check_health(url, endpoints)  # prints the summary itself
     return 0 if health.get("server_up") else 1
 
@@ -551,18 +496,24 @@ def cmd_health(args: argparse.Namespace) -> int:
 def _cmd_rollback_live(args: argparse.Namespace) -> int:
     dry_run = bool(getattr(args, "dry_run", False))
     deployer = Deployer(".", dry_run=dry_run)
-    if not dry_run and not ask_yes_no("⚠️  This rolls back the LIVE service on your platform. Continue?"):
+    if not dry_run and not ask_yes_no(
+        "This rolls back the LIVE service on your platform. Continue?"
+    ):
         print("Rollback cancelled.\n")
         return 0
 
     if not deployer.rollback_live(getattr(args, "platform", None)):
-        print("\n❌ LIVE ROLLBACK FAILED. The running service was not changed by this tool.\n")
+        print(
+            "\nLive rollback failed. The running service was not changed by this tool.\n"
+        )
         return 1
 
     if dry_run:
-        print("\n✅ DRY RUN COMPLETE. Nothing was changed.\n")
+        print("\nDry run complete. Nothing was changed.\n")
     else:
-        print("\n✅ Rollback requested. Check the platform dashboard until the service is live.\n")
+        print(
+            "\nRollback requested. Check the platform dashboard until the service is live.\n"
+        )
     return 0
 
 
@@ -571,28 +522,30 @@ def cmd_rollback(args: argparse.Namespace) -> int:
         return _cmd_rollback_live(args)
 
     deployer = Deployer(".")
-    if not ask_yes_no("⚠️  Are you sure you want to rollback?"):
+    if not ask_yes_no("Restore the project files from the previous snapshot?"):
         print("Rollback cancelled.\n")
         return 0
 
-    print("\n⏳ Restoring project files from the previous deployment snapshot...")
+    print("\nRestoring project files from the previous deployment snapshot")
     try:
         restored = deployer.rollback_manager.rollback_to_previous()
     except Exception as exc:  # pragma: no cover - user feedback path
-        print(f"\n❌ ROLLBACK FAILED: {exc}\n")
+        print(f"\nRollback failed: {exc}\n")
         return 1
 
     if not restored:
-        print("\n❌ ROLLBACK FAILED: no previous snapshot could be restored.\n")
+        print("\nRollback failed: no previous snapshot could be restored.\n")
         return 1
 
-    print("\n✅ Project files restored from the previous snapshot.")
-    print("⚠️  The live deployment was NOT changed. Redeploy the restored code on your platform.\n")
+    print("\nProject files restored from the previous snapshot.")
+    print(
+        "The live deployment was not changed. Redeploy the restored code on your platform.\n"
+    )
     return 0
 
 
 def _use_utf8_output() -> None:
-    """Windows consoles default to cp1252, which cannot print the emoji used in messages."""
+    """Keep Windows consoles (cp1252) from failing on non-ASCII file names or messages."""
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
@@ -611,14 +564,20 @@ def main() -> int:
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    setup_parser = subparsers.add_parser("setup", help="Create deployment.yaml configuration")
+    setup_parser = subparsers.add_parser(
+        "setup", help="Create deployment.yaml configuration"
+    )
     setup_parser.set_defaults(func=cmd_setup)
 
     check_parser = subparsers.add_parser("check", help="Check deployment readiness")
     check_parser.set_defaults(func=cmd_check)
 
     run_parser = subparsers.add_parser("run", help="Deploy your application")
-    run_parser.add_argument("--multi", action="store_true", help="Deploy to multiple platforms (interactive)")
+    run_parser.add_argument(
+        "--multi",
+        action="store_true",
+        help="Deploy to multiple platforms (interactive)",
+    )
     run_parser.add_argument(
         "--platform",
         choices=["render", "railway", "vercel", "heroku"],
@@ -640,20 +599,32 @@ def main() -> int:
     info_parser.set_defaults(func=cmd_info)
 
     health_parser = subparsers.add_parser("health", help="Check deployed app health")
-    health_parser.add_argument("--url", type=str, help="App URL (e.g., https://my-app.onrender.com)")
-    health_parser.add_argument("--endpoints", type=str, help="Comma-separated endpoints to check")
+    health_parser.add_argument(
+        "--url", type=str, help="App URL (e.g., https://my-app.onrender.com)"
+    )
+    health_parser.add_argument(
+        "--endpoints", type=str, help="Comma-separated endpoints to check"
+    )
     health_parser.set_defaults(func=cmd_health)
 
-    rollback_parser = subparsers.add_parser("rollback", help="Rollback to previous deployment")
+    rollback_parser = subparsers.add_parser(
+        "rollback", help="Rollback to previous deployment"
+    )
     rollback_parser.add_argument(
         "--live",
         action="store_true",
-        help="Roll back the running service on its platform (Render only). Does not touch local files.",
+        help=(
+            "Roll back the running service on its platform (Render only). "
+            "Does not touch local files."
+        ),
     )
     rollback_parser.add_argument(
         "--platform",
         choices=["render", "railway", "vercel", "heroku"],
-        help="With --live: platform to roll back (default: the platform of the latest deployment record)",
+        help=(
+            "With --live: platform to roll back "
+            "(default: the platform of the latest deployment record)"
+        ),
     )
     rollback_parser.add_argument(
         "--dry-run",
@@ -674,13 +645,12 @@ def main() -> int:
         exit_code: int = args.func(args)
         return exit_code
     except KeyboardInterrupt:  # pragma: no cover - user interrupt
-        print("\n\n⏸️  Operation cancelled by user.\n")
+        print("\n\nCancelled.\n")
         return 1
     except Exception as exc:  # pragma: no cover - defensive logging
-        print(f"\n❌ Error: {exc}\n")
+        print(f"\nError: {exc}\n")
         return 1
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

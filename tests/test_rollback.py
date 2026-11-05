@@ -1,7 +1,7 @@
 """Tests for RollbackManager snapshots and restore flow."""
 
-from pathlib import Path
 import zipfile
+from pathlib import Path
 
 from multi_platform_deployer.scripts.rollback import RollbackManager
 
