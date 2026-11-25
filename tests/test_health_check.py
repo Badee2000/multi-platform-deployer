@@ -130,3 +130,52 @@ def urllib_request():
     import urllib.request
 
     return urllib.request
+
+
+class _RedirectedResponse(_Response):
+    def __init__(self, final_url: str, status: int = 200):
+        super().__init__(status)
+        self._final_url = final_url
+
+    def geturl(self):
+        return self._final_url
+
+
+def test_server_up_false_without_retry_when_redirected_to_another_host(
+    checker, monkeypatch, caplog
+):
+    calls = []
+
+    def login_page(url, timeout):
+        calls.append(url)
+        return _RedirectedResponse("https://vercel.com/login?next=/sso-api")
+
+    monkeypatch.setattr(urllib_request(), "urlopen", login_page)
+    with caplog.at_level("ERROR"):
+        assert checker.check_server_up(max_retries=3) is False
+    assert len(calls) == 1
+    assert "redirected to vercel.com" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "final_url",
+    ["https://example.test/", "https://www.example.test/", "https://example.test/home"],
+)
+def test_same_host_redirects_still_count_as_up(checker, monkeypatch, final_url):
+    monkeypatch.setattr(
+        urllib_request(),
+        "urlopen",
+        lambda url, timeout: _RedirectedResponse(final_url),
+    )
+    assert checker.check_server_up(max_retries=3) is True
+
+
+def test_endpoint_redirected_to_another_host_is_not_ok(checker, monkeypatch):
+    monkeypatch.setattr(
+        urllib_request(),
+        "urlopen",
+        lambda url, timeout: _RedirectedResponse("https://vercel.com/login"),
+    )
+    result = checker.check_endpoints(["/health"])["/health"]
+    assert result["ok"] is False
+    assert "redirected to vercel.com" in result["error"]

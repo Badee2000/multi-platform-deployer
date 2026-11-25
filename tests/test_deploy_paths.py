@@ -1,5 +1,6 @@
 """Mocked tests for the real deploy paths. No platform CLI or API is ever called."""
 
+import json
 import subprocess
 from types import SimpleNamespace
 
@@ -144,6 +145,20 @@ def test_vercel_dry_run_runs_nothing(tmp_path, fake_cli, monkeypatch):
     monkeypatch.delenv("VERCEL_TOKEN", raising=False)
     assert VercelDeployer(str(tmp_path), dry_run=True).deploy() is True
     assert fake_cli.calls == []
+
+
+def test_vercel_snapshot_rollback_redeploys_with_token_in_env_only(
+    tmp_path, fake_cli, monkeypatch
+):
+    monkeypatch.setenv("VERCEL_TOKEN", SECRET)
+    fake_cli.responses["vercel deploy --prod --yes"] = _cp(
+        stdout="https://app-old.vercel.app\n"
+    )
+
+    assert VercelDeployer(str(tmp_path)).rollback({"platform": "vercel"}) is True
+    assert fake_cli.commands == ["vercel deploy --prod --yes"]
+    assert fake_cli.calls[0]["env"]["VERCEL_TOKEN"] == SECRET
+    assert SECRET not in fake_cli.commands[0]
 
 
 @pytest.mark.parametrize(
@@ -627,6 +642,32 @@ def test_render_redeploy_fails_when_the_build_fails(
             is False
         )
     assert "build failed" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "status, message",
+    [
+        ("canceled", "was canceled"),
+        ("deactivated", "replaced by a newer one"),
+        ("update_failed", "failed to start"),
+        ("pre_deploy_failed", "pre-deploy command failed"),
+    ],
+)
+def test_render_redeploy_fails_on_stopped_deploy_without_retrying(
+    tmp_path, fake_cli, fake_http, fake_clock, monkeypatch, caplog, status, message
+):
+    monkeypatch.setenv("RENDER_API_KEY", SECRET)
+    _render_git_responses(fake_cli)
+    _redeploy_queue(fake_http, "build_in_progress", status)
+
+    with caplog.at_level("ERROR"):
+        assert (
+            RenderDeployer(str(tmp_path), {"render_service_id": "srv-9"}).deploy()
+            is False
+        )
+    assert message in caplog.text
+    assert SECRET not in caplog.text
+    assert len([c for c in fake_http["calls"] if c["method"] == "POST"]) == 1
 
 
 def test_render_redeploy_times_out_without_retrying(
@@ -1141,11 +1182,145 @@ def test_render_rollback_method_never_redeploys_current_code(
 
 def test_platforms_without_live_rollback_say_so(tmp_path, fake_cli, caplog):
     with caplog.at_level("ERROR"):
-        assert VercelDeployer(str(tmp_path)).rollback_live() is False
+        assert RailwayDeployer(str(tmp_path)).rollback_live() is False
+        assert HerokuDeployer(str(tmp_path)).rollback_live() is False
     assert "not supported" in caplog.text
-    assert VercelDeployer.supports_live_rollback is False
+    assert RailwayDeployer.supports_live_rollback is False
+    assert HerokuDeployer.supports_live_rollback is False
     assert RenderDeployer.supports_live_rollback is True
+    assert VercelDeployer.supports_live_rollback is True
     assert fake_cli.calls == []
+
+
+VERCEL_LIST = "vercel list --environment production --status READY --json"
+VERCEL_ROLLBACK_V1 = "vercel rollback https://app-v1.vercel.app --yes --timeout 3m"
+
+
+def _vercel_list_output(*deployments):
+    items = [
+        {"url": url, "state": "READY", "target": "production", "createdAt": created}
+        for url, created in deployments
+    ]
+    return _cp(stdout=json.dumps({"deployments": items, "pagination": {}}))
+
+
+def test_vercel_rollback_live_targets_the_second_newest_ready_deployment(
+    tmp_path, fake_cli, monkeypatch, caplog
+):
+    monkeypatch.setenv("VERCEL_TOKEN", SECRET)
+    # Listed out of order on purpose: the tool must sort by creation time.
+    fake_cli.responses[VERCEL_LIST] = _vercel_list_output(
+        ("app-v1.vercel.app", 100),
+        ("app-v3.vercel.app", 300),
+        ("app-v2.vercel.app", 200),
+    )
+    fake_cli.responses[
+        "vercel rollback https://app-v2.vercel.app --yes --timeout 3m"
+    ] = _cp(stdout="Success! Rolled back\n")
+
+    with caplog.at_level("INFO"):
+        assert VercelDeployer(str(tmp_path)).rollback_live() is True
+    assert fake_cli.commands == [
+        VERCEL_LIST,
+        "vercel rollback https://app-v2.vercel.app --yes --timeout 3m",
+    ]
+    assert all(c["env"]["VERCEL_TOKEN"] == SECRET for c in fake_cli.calls)
+    assert all(SECRET not in command for command in fake_cli.commands)
+    assert "vercel promote" in caplog.text
+
+
+def test_vercel_rollback_live_needs_two_ready_deployments(
+    tmp_path, fake_cli, monkeypatch, caplog
+):
+    monkeypatch.setenv("VERCEL_TOKEN", SECRET)
+    fake_cli.responses[VERCEL_LIST] = _vercel_list_output(("app-v1.vercel.app", 100))
+
+    with caplog.at_level("ERROR"):
+        assert VercelDeployer(str(tmp_path)).rollback_live() is False
+    assert "at least two successful production deployments" in caplog.text
+    assert fake_cli.commands == [VERCEL_LIST]
+
+
+def test_vercel_rollback_live_unreadable_list_changes_nothing(
+    tmp_path, fake_cli, monkeypatch, caplog
+):
+    monkeypatch.setenv("VERCEL_TOKEN", SECRET)
+    fake_cli.responses[VERCEL_LIST] = _cp(stdout="not json")
+
+    with caplog.at_level("ERROR"):
+        assert VercelDeployer(str(tmp_path)).rollback_live() is False
+    assert "Could not read the list of Vercel deployments" in caplog.text
+    assert fake_cli.commands == [VERCEL_LIST]
+
+
+def test_vercel_rollback_live_failure_returns_false_and_hides_token(
+    tmp_path, fake_cli, monkeypatch, caplog
+):
+    monkeypatch.setenv("VERCEL_TOKEN", SECRET)
+    fake_cli.responses[VERCEL_LIST] = _vercel_list_output(
+        ("app-v2.vercel.app", 200), ("app-v1.vercel.app", 100)
+    )
+    fake_cli.responses[VERCEL_ROLLBACK_V1] = _cp(
+        stderr=f"To rollback further than the previous production deployment, "
+        f"upgrade to pro. {SECRET}",
+        returncode=1,
+    )
+
+    with caplog.at_level("ERROR"):
+        assert VercelDeployer(str(tmp_path)).rollback_live() is False
+    assert "upgrade to pro" in caplog.text
+    assert SECRET not in caplog.text
+    assert fake_cli.commands.count(VERCEL_ROLLBACK_V1) == 1
+
+
+def test_vercel_rollback_live_list_failure_hides_token_and_stops(
+    tmp_path, fake_cli, monkeypatch, caplog
+):
+    monkeypatch.setenv("VERCEL_TOKEN", SECRET)
+    fake_cli.responses[VERCEL_LIST] = _cp(
+        stderr=f"Error: User not found. {SECRET}", returncode=1
+    )
+
+    with caplog.at_level("ERROR"):
+        assert VercelDeployer(str(tmp_path)).rollback_live() is False
+    assert "User not found" in caplog.text
+    assert SECRET not in caplog.text
+    assert fake_cli.commands == [VERCEL_LIST]
+
+
+def test_vercel_rollback_live_needs_token_and_runs_nothing(
+    tmp_path, fake_cli, monkeypatch, caplog
+):
+    monkeypatch.delenv("VERCEL_TOKEN", raising=False)
+
+    with caplog.at_level("ERROR"):
+        assert VercelDeployer(str(tmp_path)).rollback_live() is False
+    assert "VERCEL_TOKEN is not set" in caplog.text
+    assert fake_cli.calls == []
+
+
+def test_vercel_rollback_live_dry_run_executes_nothing(
+    tmp_path, fake_cli, monkeypatch, caplog
+):
+    monkeypatch.delenv("VERCEL_TOKEN", raising=False)
+
+    with caplog.at_level("INFO"):
+        assert VercelDeployer(str(tmp_path), dry_run=True).rollback_live() is True
+    assert fake_cli.calls == []
+    assert f"would run: {VERCEL_LIST}" in caplog.text
+    assert "would run: vercel rollback <previous production deployment>" in caplog.text
+    assert "vercel promote" not in caplog.text
+
+
+def test_vercel_rollback_live_missing_cli_fails_cleanly(
+    tmp_path, fake_cli, monkeypatch, caplog
+):
+    monkeypatch.setenv("VERCEL_TOKEN", SECRET)
+    monkeypatch.setattr(base_module.shutil, "which", lambda name: None)
+
+    with caplog.at_level("ERROR"):
+        assert VercelDeployer(str(tmp_path)).rollback_live() is False
+    assert "'vercel' was not found on PATH" in caplog.text
 
 
 def _write_project(tmp_path, with_record=True):

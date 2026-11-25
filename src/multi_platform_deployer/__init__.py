@@ -2,7 +2,7 @@
 Multi-Platform Deployer - A unified Python package for deploying to multiple platforms.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __author__ = "Multi-Platform Deployer Team"
 
 from .main import Deployer

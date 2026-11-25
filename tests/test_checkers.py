@@ -58,6 +58,21 @@ if __name__ == '__main__':
 
         assert result.passed is True
 
+    def test_wsgi_app_accepts_app_py_that_defines_app(self, temp_project):
+        """Vercel loads `app` from app.py, so wsgi.py must not be required."""
+        result = FlaskChecker(temp_project).check_wsgi_app()
+
+        assert result.passed is True
+        assert "app.py" in result.message
+
+    def test_wsgi_app_fails_without_a_module_level_app(self, tmp_path):
+        (tmp_path / "app.py").write_text("def create_app():\n    app = object()\n")
+
+        assert FlaskChecker(str(tmp_path)).check_wsgi_app().passed is False
+
+    def test_wsgi_app_fails_with_no_entry_point(self, tmp_path):
+        assert FlaskChecker(str(tmp_path)).check_wsgi_app().passed is False
+
     def test_check_debug_mode(self, temp_project):
         """Test debug mode check."""
         checker = FlaskChecker(temp_project)

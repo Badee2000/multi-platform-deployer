@@ -13,10 +13,14 @@ The goal is to catch common problems BEFORE you deploy,
 not after your app is live and broken.
 """
 
+import re
 from typing import List, Tuple
 
 from ..utils.helpers import file_exists, read_file
 from .base import BaseChecker, CheckResult
+
+# A module-level `app = ...` or `application = ...` (optionally annotated).
+MODULE_APP_PATTERN = re.compile(r"^(app|application)\s*(:[^=\n]+)?=", re.MULTILINE)
 
 
 class FlaskChecker(BaseChecker):
@@ -69,7 +73,7 @@ class FlaskChecker(BaseChecker):
         )
 
     def check_wsgi_app(self) -> CheckResult:
-        """Check if WSGI application is properly configured."""
+        """Check that a WSGI application is exposed by wsgi.py, app.py or main.py."""
         wsgi_file = self.project_root / "wsgi.py"
 
         if wsgi_file.exists():
@@ -81,6 +85,21 @@ class FlaskChecker(BaseChecker):
                     )
             except Exception as e:
                 self.logger.warning(f"Error reading wsgi.py: {e}")
+
+        # Platforms such as Vercel load `app` straight from app.py or main.py.
+        for file_name in ["app.py", "main.py"]:
+            path = self.project_root / file_name
+            if not path.exists():
+                continue
+            try:
+                if MODULE_APP_PATTERN.search(read_file(str(path))):
+                    return CheckResult(
+                        "WSGI application",
+                        True,
+                        f"WSGI application found in {file_name}",
+                    )
+            except Exception as e:
+                self.logger.warning(f"Error reading {file_name}: {e}")
 
         return CheckResult(
             "WSGI application", False, "WSGI application not properly configured"

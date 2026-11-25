@@ -229,6 +229,9 @@ class Deployer:
         self.logger.info(f"Deployed to {platform}.")
         if deployed_url:
             self.logger.info(f"URL: {deployed_url}")
+            self.logger.info(
+                f"Check it: multi-platform-deployer health --url {deployed_url}"
+            )
 
         self.rollback_manager.create_checkpoint(
             platform=platform,

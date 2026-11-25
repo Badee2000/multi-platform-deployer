@@ -4,8 +4,29 @@ import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 from ..utils.logger import get_logger
+
+
+def _bare_host(url: str) -> str:
+    host = (urlsplit(url).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def redirected_host(requested_url: str, response: Any) -> Optional[str]:
+    """
+    Return the host a response ended up on if it differs from the requested one.
+
+    urllib follows redirects silently. A redirect to another host, such as the
+    login page of a protected Vercel deployment, returns HTTP 200 but is not
+    the app. A change of scheme or a www. prefix does not count.
+    """
+    final_url = getattr(response, "geturl", lambda: requested_url)()
+    final_host = _bare_host(final_url)
+    if final_host and final_host != _bare_host(requested_url):
+        return final_host
+    return None
 
 
 class HealthChecker:
@@ -44,6 +65,16 @@ class HealthChecker:
         for attempt in range(max_retries):
             try:
                 response = urllib.request.urlopen(self.base_url, timeout=5)
+
+                other_host = redirected_host(self.base_url, response)
+                if other_host:
+                    self.logger.error(
+                        f"{self.base_url} redirected to {other_host}, so the app "
+                        "was not reached. If the deployment is protected by a "
+                        "login (for example Vercel Deployment Protection), turn "
+                        "that off or check the app another way."
+                    )
+                    return False
 
                 if response.status < 500:
                     self.logger.info("Server is responding")
@@ -86,6 +117,16 @@ class HealthChecker:
             try:
                 url = f"{self.base_url}{endpoint}"
                 response = urllib.request.urlopen(url, timeout=5)
+
+                other_host = redirected_host(url, response)
+                if other_host:
+                    results[endpoint] = {
+                        "status": response.status,
+                        "ok": False,
+                        "error": f"redirected to {other_host}; the app was not reached",
+                    }
+                    self.logger.warning(f"{endpoint}: redirected to {other_host}")
+                    continue
 
                 results[endpoint] = {
                     "status": response.status,

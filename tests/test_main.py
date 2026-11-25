@@ -77,6 +77,32 @@ if __name__ == '__main__':
         is_ready, results = deployer.check_deployment_readiness("invalid-framework")
         assert is_ready is False
 
+    def test_deploy_prints_health_command_with_url(
+        self, temp_project, monkeypatch, caplog
+    ):
+        """After a successful deploy, the log tells the user how to check it."""
+
+        class StubDeployer:
+            deployed_url = "https://app.onrender.com"
+
+            def deploy(self):
+                return True
+
+        deployer = Deployer(temp_project)
+        monkeypatch.setattr(deployer, "_run_system_checks", lambda: (True, []))
+        monkeypatch.setattr(deployer, "validate_deployment", lambda _p: True)
+        monkeypatch.setattr(
+            deployer.rollback_manager, "create_checkpoint", lambda **_kw: None
+        )
+        deployer.deployers["render"] = StubDeployer()
+
+        with caplog.at_level("INFO"):
+            assert deployer.deploy("render", run_migrations=False) is True
+        assert (
+            "multi-platform-deployer health --url https://app.onrender.com"
+            in caplog.text
+        )
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

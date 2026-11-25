@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.0 - 2026-11-25
+
+Vercel is now verified live with a Flask app. Railway and Heroku, and Vercel with Django or FastAPI, are still only covered by mocked tests.
+
+### Changed
+
+- `health` reports a failure when the URL redirects to a different host, for example the login page of a Vercel project with Deployment Protection. Before, the redirect was followed and the login page was reported as "up" with HTTP 200. The failure is reported without retries and names the host. Redirects that stay on the same host (http to https, `www.`) still count as up. Scripts that relied on the old result for protected deployments will now see exit code 1.
+
+### Added
+
+- Vercel: `rollback --live --platform vercel` lists the successful production deployments with `vercel list`, picks the second newest and runs `vercel rollback <url> --yes --timeout 3m`. It needs `VERCEL_TOKEN`, supports `--dry-run`, never retries, keeps the token out of logs, stops if fewer than two successful production deployments exist, and reminds you to run `vercel promote <url>` because Vercel stops promoting new deployments after a rollback. The target is always passed explicitly, because `vercel rollback` without one changes nothing when the newest production deployment failed to build (found live: the command reported success and production kept serving the same version).
+- README: a Troubleshooting section with the tool's exact error messages, why each happens and how to fix it, for every platform, including the failed Vercel build and the `User not found (404)` token-scope error seen live.
+- After a successful deploy, `run` prints the exact `health --url <url>` command to run next, when the platform reported a URL.
+- Mocked tests for a Render deploy that is canceled, replaced, fails to start or fails its pre-deploy command. Each must make `run` fail, never retry the deploy, and keep the API key out of the log. Mocked tests for the Vercel rollback and for the Vercel file-snapshot rollback.
+
+### Fixed
+
+- Flask readiness check: "WSGI application" no longer fails when the app is `app.py` or `main.py` with a module-level `app` (or `application`). It used to require `wsgi.py`, which wrongly blocked Flask apps for Vercel.
+
+### Verified live
+
+- Vercel with Flask: first production deploy, a redeploy (v1 to v2, new deployment served the new code), a deliberately broken build (nonexistent package: exit code 1, no "Deployed" message, no state saved, the live app kept serving v2) and `rollback --live` (production domains went from v2 back to v1, then `vercel promote` put v2 back). Checked through `vercel curl`: `/`, `/health` and the JSON 404 handler answered correctly. `health` passes on an unprotected URL and fails on a protected one.
+- Not verified live: Vercel with Django or FastAPI, Railway, Heroku.
+
 ## 0.4.0 - 2026-11-05
 
 ### Changed

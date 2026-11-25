@@ -441,7 +441,7 @@ OPTIONS:
     --migrate          With 'run': run database migrations first
     --url URL          With 'health': base URL of the app
     --endpoints PATHS  With 'health': comma-separated paths to request (default: /)
-    --live             With 'rollback': roll back the running service (Render only)
+    --live             With 'rollback': roll back the running service (Render and Vercel)
     -h, --help         Show this help
 
 EXAMPLES:
@@ -614,7 +614,7 @@ def main() -> int:
         "--live",
         action="store_true",
         help=(
-            "Roll back the running service on its platform (Render only). "
+            "Roll back the running service on its platform (Render and Vercel). "
             "Does not touch local files."
         ),
     )
