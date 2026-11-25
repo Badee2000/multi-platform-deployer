@@ -14,6 +14,32 @@ It does three things:
 
 It does not provision databases, and it does not upload secrets. You set those in each platform's dashboard.
 
+## Why use this instead of the platform's CLI?
+
+If you deploy one app to one platform, you can run that platform's own command, such as `vercel deploy --prod`. This tool runs that same command for the upload. What it adds is around the upload.
+
+**What it adds**
+
+- **Checks before deploying.** It stops the deploy when the project isn't ready. For example, Render builds from your git remote, so uncommitted or unpushed work is refused. It also checks the start command, `SECRET_KEY`, pinned dependencies and the app's entry point.
+- **Handling of problems found in live runs.**
+  - After a failed Vercel build, the live app stays up and the tool exits with code 1.
+  - `rollback --live` on Vercel picks the right deployment explicitly. `vercel rollback` without a target changed nothing, yet reported success, when the newest deployment had failed.
+  - `health` reports a failure when a protected Vercel URL redirects to a login page, instead of calling it "up".
+  - Render's auto-deploy state is reported after a rollback.
+- **Same commands on every platform.** `run`, `health` and `rollback --live` work the same way, and `--dry-run` shows the steps without running them. Only Render (Flask, Django, FastAPI) and Vercel (Flask) have been run live so far.
+- **Safe defaults.** Tokens are read from environment variables only and are removed from logs and error messages. Nothing is retried automatically. Every command returns a non-zero exit code on failure, so you can use it in scripts and CI.
+- **Predictable behavior.** The same input produces the same steps. It runs locally, needs no AI session, and sends your credentials to no one but the platform.
+
+**What it does not do**
+
+- It does not replace the platform CLI. You still install it, and the upload is done by that CLI or the platform's API.
+- It does not create databases, and it does not upload secrets. Set those in the platform's dashboard.
+- It does not make a single deploy faster. The saving is fewer failed deploys and less time spent debugging them.
+
+**When you probably don't need it**
+
+You deploy one app to one platform, and you're comfortable with that platform's CLI and dashboard.
+
 ## What you can do with it
 
 | Task | Command | Status |

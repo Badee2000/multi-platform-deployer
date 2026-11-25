@@ -10,6 +10,7 @@ Vercel is now verified live with a Flask app. Railway and Heroku, and Vercel wit
 
 ### Added
 
+- README: a "Why use this instead of the platform's CLI?" section that says what the tool adds, what it does not do, and when you probably don't need it.
 - Vercel: `rollback --live --platform vercel` lists the successful production deployments with `vercel list`, picks the second newest and runs `vercel rollback <url> --yes --timeout 3m`. It needs `VERCEL_TOKEN`, supports `--dry-run`, never retries, keeps the token out of logs, stops if fewer than two successful production deployments exist, and reminds you to run `vercel promote <url>` because Vercel stops promoting new deployments after a rollback. The target is always passed explicitly, because `vercel rollback` without one changes nothing when the newest production deployment failed to build (found live: the command reported success and production kept serving the same version).
 - README: a Troubleshooting section with the tool's exact error messages, why each happens and how to fix it, for every platform, including the failed Vercel build and the `User not found (404)` token-scope error seen live.
 - After a successful deploy, `run` prints the exact `health --url <url>` command to run next, when the platform reported a URL.
